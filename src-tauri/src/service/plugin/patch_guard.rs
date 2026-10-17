@@ -97,12 +97,16 @@ pub(crate) fn preflight_at(
     Err(unresolved_entries_message(&entries))
 }
 
-/// 解析补丁层：语法错误时返回 serde_yaml 的错误文本（含行列号）。
-///
-/// 文件不存在、读不出来（权限错位/竞态）都不算语法错误——那些由可写性预检与
-/// 上游自身的错误路径负责，本模块只处理「文件在、但 YAML 解析不了」。
+pub(super) const PATCH_ENCODING_FAILED: &str = "INTERNAL_PLUGIN_PATCH_ENCODING_FAILED";
+
 fn parse_error(path: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(path).ok()?;
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            return Some(format!("{PATCH_ENCODING_FAILED}: {error}"));
+        }
+        Err(_) => return None,
+    };
     serde_yaml::from_str::<serde_yaml::Value>(&raw)
         .err()
         .map(|error| error.to_string())
@@ -299,6 +303,51 @@ mod tests {
         // 不存在的文件不是语法错误（由上游与可写性预检负责）。
         assert!(parse_error(&dir.join("missing.yml")).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quarantine_preserves_non_utf8_bytes_in_both_layers() {
+        for bytes in [
+            b"\xff\xfe-\0 \0i\0d\0:\0 \0x\0\n\0".as_slice(),
+            b"- id: plugin\n  name: \xc4\xe3\xba\xc3\n".as_slice(),
+            b"# truncated \xe4\xb8".as_slice(),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            let profile = home.join("profiles/tauri");
+            std::fs::create_dir_all(&profile).unwrap();
+            let paths = patch_layer_paths(&profile, home);
+            for path in &paths {
+                std::fs::write(path, bytes).unwrap();
+                let error = parse_error(path).expect("encoding damage must be quarantinable");
+                assert!(error.contains("UTF-8"), "{error}");
+                assert_eq!(std::fs::read(path).unwrap(), bytes);
+            }
+
+            let report = quarantine_patch_layers_in(&profile, home);
+            assert!(!report.has_failures(), "{report:?}");
+            assert_eq!(report.quarantined.len(), 2);
+            for (record, path) in report.quarantined.iter().zip(&paths) {
+                assert_eq!(record.original, path.display().to_string());
+                assert!(!path.exists());
+                assert_eq!(std::fs::read(&record.backup).unwrap(), bytes);
+            }
+            let repeated = quarantine_patch_layers_in(&profile, home);
+            assert!(repeated.quarantined.is_empty());
+            assert!(!repeated.has_failures());
+        }
+    }
+
+    #[test]
+    fn quarantine_does_not_mistake_io_errors_for_encoding_damage() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(PATCH_FILENAME);
+        std::fs::create_dir(&path).unwrap();
+        assert!(parse_error(&path).is_none());
+        let report = quarantine_layers(std::slice::from_ref(&path), "20261017000000");
+        assert!(report.quarantined.is_empty());
+        assert!(report.failures.is_empty());
+        assert!(path.is_dir());
     }
 
     #[test]

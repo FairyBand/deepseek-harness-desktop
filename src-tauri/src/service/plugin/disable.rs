@@ -154,7 +154,8 @@ pub(crate) fn add_patch_disable(profile: &Path, id: &str) -> Result<bool, String
     }
     let rendered = serde_yaml::to_string(&serde_yaml::Value::Sequence(entries))
         .map_err(|e| format!("DISABLE_PATCH_RENDER_FAILED: {e}"))?;
-    fs::write(&path, rendered).map_err(|e| format!("DISABLE_PATCH_WRITE_FAILED: {e}"))?;
+    super::atomic_write::write_patch_layer_atomically(&path, &rendered)
+        .map_err(|e| format!("DISABLE_PATCH_WRITE_FAILED: {e}"))?;
     log::info!("Disabled plugin {id} via cordis.patch.yml override");
     Ok(true)
 }
@@ -198,7 +199,8 @@ pub(crate) fn strip_patch_disable(profile: &Path, id: &str) -> Result<bool, Stri
     }
     let rendered = serde_yaml::to_string(&serde_yaml::Value::Sequence(kept))
         .map_err(|e| format!("ENABLE_PATCH_RENDER_FAILED: {e}"))?;
-    fs::write(&path, rendered).map_err(|e| format!("ENABLE_PATCH_WRITE_FAILED: {e}"))?;
+    super::atomic_write::write_patch_layer_atomically(&path, &rendered)
+        .map_err(|e| format!("ENABLE_PATCH_WRITE_FAILED: {e}"))?;
     log::info!("Stripped cordis.patch.yml disable override for plugin {id}");
     Ok(true)
 }

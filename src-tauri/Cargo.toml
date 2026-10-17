@@ -104,11 +104,11 @@ tokio = { version = "1", features = [ "full" ] }
 semver = "1"
 dunce = "1.0.5"
 sysinfo = { version = "0.39.6", default-features = false, features = [ "system" ] }
+tempfile = "3"
 
 [dev-dependencies]
 auto-launch = "0.5"
 tauri = { version = "2", features = [ "test" ] }
-tempfile = "3"
 
 # 选择数据存放目录（issue #871）：Windows 走原生 IFileDialog、macOS 走 NSOpenPanel、
 # Linux 走 xdg-desktop-portal（无 portal 时 rfd 自己回退到 zenity）。
@@ -184,6 +184,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Diagnostics_ToolHelp",

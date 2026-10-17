@@ -241,10 +241,12 @@ fn repair_loader_state(
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(format!(
-                    "INTERNAL_PLUGIN_PATCH_READ_FAILED: {}: {error}",
-                    patch_path.display()
-                ))
+                let code = if error.kind() == std::io::ErrorKind::InvalidData {
+                    super::patch_guard::PATCH_ENCODING_FAILED
+                } else {
+                    "INTERNAL_PLUGIN_PATCH_READ_FAILED"
+                };
+                return Err(format!("{code}: {}: {error}", patch_path.display()));
             }
         };
         let mut patch = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(|e| {
@@ -260,12 +262,14 @@ fn repair_loader_state(
             }
             let rendered = serde_yaml::to_string(&patch)
                 .map_err(|e| format!("INTERNAL_PLUGIN_PATCH_RENDER_FAILED: {e}"))?;
-            std::fs::write(&patch_path, rendered).map_err(|e| {
-                format!(
-                    "INTERNAL_PLUGIN_PATCH_WRITE_FAILED: {}: {e}",
-                    patch_path.display()
-                )
-            })?;
+            super::atomic_write::write_patch_layer_atomically(&patch_path, &rendered).map_err(
+                |e| {
+                    format!(
+                        "INTERNAL_PLUGIN_PATCH_WRITE_FAILED: {}: {e}",
+                        patch_path.display()
+                    )
+                },
+            )?;
             log::warn!(
                 "INTERNAL_PLUGIN_PROFILE_MIGRATED: removed stale internal loader entries from {}",
                 patch_path.display()
@@ -1331,6 +1335,65 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn loader_rejects_non_utf8_layers_without_rewriting_and_recovers_after_quarantine() {
+        for bytes in [
+            b"\xff\xfe[\0]\0\n\0".as_slice(),
+            b"- id: plugin\n  name: \xc4\xe3\xba\xc3\n".as_slice(),
+        ] {
+            for home_layer in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let home = temp.path();
+                let profile = home.join("profiles/tauri");
+                std::fs::create_dir_all(&profile).unwrap();
+                let path = if home_layer { home } else { &profile }.join("cordis.patch.yml");
+                std::fs::write(&path, bytes).unwrap();
+
+                for prepare in [false, true] {
+                    let error =
+                        repair_loader_state(&profile, home, &[], &mut None, prepare).unwrap_err();
+                    assert!(
+                        error.starts_with("INTERNAL_PLUGIN_PATCH_ENCODING_FAILED: "),
+                        "{error}"
+                    );
+                    assert!(error.contains(&path.display().to_string()), "{error}");
+                    assert!(error.contains("UTF-8"), "{error}");
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                }
+
+                let recovery_profile = if home_layer {
+                    let safe = home.join("profiles/safe");
+                    std::fs::create_dir_all(&safe).unwrap();
+                    safe
+                } else {
+                    profile
+                };
+                let report =
+                    super::super::patch_guard::quarantine_patch_layers_in(&recovery_profile, home);
+                assert!(!report.has_failures(), "{report:?}");
+                assert_eq!(report.quarantined.len(), 1);
+                assert_eq!(std::fs::read(&report.quarantined[0].backup).unwrap(), bytes);
+                assert_eq!(
+                    repair_loader_state(&recovery_profile, home, &[], &mut None, true),
+                    Ok(false)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loader_keeps_io_errors_distinct_from_encoding_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("profiles/tauri");
+        std::fs::create_dir_all(profile.join("cordis.patch.yml")).unwrap();
+        let error = repair_loader_state(&profile, temp.path(), &[], &mut None, true).unwrap_err();
+        assert!(
+            error.starts_with("INTERNAL_PLUGIN_PATCH_READ_FAILED: "),
+            "{error}"
+        );
+        assert!(profile.join("cordis.patch.yml").is_dir());
+    }
 
     #[test]
     fn early_prepare_uses_normal_kernel_and_defers_repairs_without_installing() {

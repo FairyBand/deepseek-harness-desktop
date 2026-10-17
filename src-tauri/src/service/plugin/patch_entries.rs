@@ -22,6 +22,7 @@ use std::path::Path;
 use serde_yaml::{Mapping, Value};
 use tauri::AppHandle;
 
+use super::atomic_write::write_patch_layer_atomically;
 use super::installed::ProfilePackageJson;
 use super::patch_guard::{backup_path, now_stamp, patch_layer_paths};
 
@@ -125,7 +126,12 @@ pub(crate) fn strip_unresolved_entries_in(
             .map_err(|e| format!("PATCH_LAYER_STRIP_BACKUP_FAILED: {}: {e}", backup.display()))?;
         let rendered = serde_yaml::to_string(&Value::Sequence(kept))
             .map_err(|e| format!("PATCH_LAYER_STRIP_RENDER_FAILED: {e}"))?;
-        write_patch_layer_atomically(&layer, &rendered, &stamp)?;
+        write_patch_layer_atomically(&layer, &rendered).map_err(|error| {
+            format!(
+                "PATCH_LAYER_STRIP_WRITE_FAILED: {}: {error}",
+                layer.display()
+            )
+        })?;
         log::warn!(
             "PATCH_LAYER_ENTRIES_STRIPPED: {} -> {} (removed {removed})",
             layer.display(),
@@ -352,28 +358,6 @@ fn has_effective_id(map: &Mapping) -> bool {
         Some(Value::Null) | None => false,
         Some(_) => true,
     }
-}
-
-/// 原子改写补丁层：先写同目录临时文件再改名替换。
-///
-/// `fs::write` 会先截断原文件，写到一半失败（磁盘满 / 被中断）会把用户手写的补丁层
-/// 截成半截 YAML——虽然 `.bak-<时间戳>` 备份还在，但半截文件会让下次启动多报一个
-/// 语法错误。同目录 `rename` 在 Windows（`MOVEFILE_REPLACE_EXISTING`）与 Unix 上
-/// 都是原子替换，失败时原文件保持不动。
-fn write_patch_layer_atomically(layer: &Path, rendered: &str, stamp: &str) -> Result<(), String> {
-    let name = layer
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let temp = layer.with_file_name(format!("{name}.tmp-{stamp}"));
-    std::fs::write(&temp, rendered).map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
-        format!("PATCH_LAYER_STRIP_WRITE_FAILED: {}: {e}", temp.display())
-    })?;
-    std::fs::rename(&temp, layer).map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
-        format!("PATCH_LAYER_STRIP_WRITE_FAILED: {}: {e}", layer.display())
-    })
 }
 
 /// 取映射字段；用迭代而不是 `Mapping::get`，避开 serde_yaml 的索引泛型差异。
@@ -781,6 +765,33 @@ mod tests {
         assert!(with_id("id: 7"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn strip_rejects_a_symlink_to_a_sibling_profile_without_changing_its_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("profiles/tauri");
+        let sibling = temp.path().join("profiles/work");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        install_package(&sibling, "dsh-file-edit");
+        let target = sibling.join("cordis.patch.yml");
+        std::fs::write(&target, DANGLING_LAYER).unwrap();
+        let link = profile.join("cordis.patch.yml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let error = strip_unresolved_entries_in(&profile, temp.path(), None).unwrap_err();
+        assert!(
+            error.starts_with("PATCH_LAYER_STRIP_WRITE_FAILED: "),
+            "{error}"
+        );
+        assert!(error.contains("symlink"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), DANGLING_LAYER);
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
     /// 原子改写：成功路径不留临时文件，且内容与备份都在。
     #[test]
     fn strip_leaves_no_temp_file_behind() {
@@ -794,7 +805,7 @@ mod tests {
             .unwrap()
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.contains(".tmp-"))
+            .filter(|name| name.contains(".tmp-") || name.starts_with(".cordis.patch-"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
         let _ = std::fs::remove_dir_all(&profile);

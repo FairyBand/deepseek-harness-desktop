@@ -1,35 +1,22 @@
-/**
- * 补丁层问题的识别与信息提取（纯函数，便于单测）。
- *
- * 两类问题：
- * - YAML 语法错误：Rust 侧 `service::plugin::internal::repair_loader_state` 解析
- *   档案层 / home 层的 `cordis.patch.yml` 失败时抛出
- *   `INTERNAL_PLUGIN_PATCH_PARSE_FAILED: <路径>: <错误>`（见
- *   `service::plugin::patch_guard` 的模块说明），随后被包成
- *   `INTERNAL_PLUGIN_INSTALL_FAILED` 并挂在「Plugin installation 阶段」——用户看到
- *   的是「插件安装失败」，实际原因却是补丁文件写错了（issue #525）。
- * - 悬空 insert 条目：手写的 `insert` 引用了装不出来的包，loader 抛
- *   `ERR_MODULE_NOT_FOUND` 让整棵树加载失败（见 `service::plugin::patch_entries`），
- *   启动前预检抛出 `PATCH_LAYER_ENTRY_UNRESOLVED: {json}`。
- *
- * 两类都在这里转成「哪个文件、哪一行、怎么改」的针对性提示与恢复入口。
- */
-
-/** Rust 侧补丁层解析失败的错误码。 */
 export const PATCH_PARSE_ERROR_CODE = 'INTERNAL_PLUGIN_PATCH_PARSE_FAILED'
+export const PATCH_ENCODING_ERROR_CODE = 'INTERNAL_PLUGIN_PATCH_ENCODING_FAILED'
 
-/** 启动失败信息里是否包含补丁层解析失败。 */
 export function containsPatchLayerParseError(message: string): boolean {
   return message.includes(`${PATCH_PARSE_ERROR_CODE}:`)
 }
 
-/** 提取补丁层解析失败的「路径 + YAML 错误（含行列号）」片段（无则空串）。 */
+export function containsPatchLayerEncodingError(message: string): boolean {
+  return message.includes(`${PATCH_ENCODING_ERROR_CODE}:`)
+}
+
 export function patchLayerErrorDetail(message: string): string {
-  const marker = `${PATCH_PARSE_ERROR_CODE}:`
-  const at = message.indexOf(marker)
-  if (at < 0)
-    return ''
-  return message.slice(at + marker.length).trim()
+  for (const code of [PATCH_ENCODING_ERROR_CODE, PATCH_PARSE_ERROR_CODE]) {
+    const marker = `${code}:`
+    const at = message.indexOf(marker)
+    if (at >= 0)
+      return message.slice(at + marker.length).trim()
+  }
+  return ''
 }
 
 /** Rust 侧补丁层「隔离失败」的错误码。 */

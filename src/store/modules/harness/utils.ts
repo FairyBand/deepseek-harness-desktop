@@ -15,6 +15,7 @@ import {
 } from './constants'
 import {
   containsPatchEntryUnresolved,
+  containsPatchLayerEncodingError,
   containsPatchLayerParseError,
   containsQuarantineFailure,
   patchEntryUnresolvedEntries,
@@ -242,10 +243,12 @@ export async function attachStartupDiagnostics(err: unknown, processExited = fal
       diagnosed.heapOomHint = peakMb === undefined ? hint : `${hint} ${i18next.t('errors.heap_oom_peak', { peak: peakMb })}`
     }
   }
-  // 补丁层 YAML 语法错误（issue #525）：真实原因是用户手写的 `cordis.patch.yml`
-  // 解析不了，但失败阶段是「Plugin installation」，很容易被当成插件损坏。这里挂上
-  // 「哪个文件、哪一行、怎么改」的提示（错误页据此给出隔离入口）。
-  if (containsPatchLayerParseError(diagnosed.message)) {
+  if (containsPatchLayerEncodingError(diagnosed.message)) {
+    diagnosed.patchLayerHint = i18next.t('errors.patch_layer_encoding_failed', {
+      detail: patchLayerErrorDetail(diagnosed.message),
+    })
+  }
+  else if (containsPatchLayerParseError(diagnosed.message)) {
     diagnosed.patchLayerHint = i18next.t('errors.patch_layer_parse_failed', {
       detail: patchLayerErrorDetail(diagnosed.message),
     })

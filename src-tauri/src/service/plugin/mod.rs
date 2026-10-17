@@ -34,6 +34,7 @@
 //! - [`hmr`]：本地路径插件的热重载（把已挂载的本地插件源码目录写进桌面端独占的
 //!   补丁层，随启动以 `--patch` 注入核心 HMR，源码改动即时生效）
 
+mod atomic_write;
 mod cancel;
 pub mod compat;
 pub mod disable;
