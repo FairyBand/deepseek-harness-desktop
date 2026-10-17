@@ -65,7 +65,7 @@ afterEach(() => {
 })
 
 describe('getOverlayMarkedStyle', () => {
-  it('≤0.1.7-alpha.1：底色在蒙版元素自身', () => {
+  it('preserves an opaque background painted on the overlay itself', () => {
     install([element({
       own: {
         backgroundColor: 'rgba(0, 0, 0, 0.24)',

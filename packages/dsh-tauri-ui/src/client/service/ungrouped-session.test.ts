@@ -7,6 +7,7 @@
  * 不新造；目录解析失败时退回无参创建；失败只告警，不把 rejection 漏给 UI 调用点。
  */
 import type { ClientContext, SessionId } from 'dsh-tauri/client'
+import { defineAdapter } from 'dsh-tauri/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getUngrouped } from '../apis'
 import { startUngroupedSession } from './ungrouped-session'
@@ -35,30 +36,36 @@ function createCtx(options: CtxOptions = {}) {
   const open = vi.fn()
   const selectPanel = vi.fn()
   const items = options.sessionIds === undefined ? [] : [{ sessionIds: options.sessionIds }]
-  const ctx = {
-    sessions: {
-      list: {
-        getSnapshot: () => ({
-          current: options.current,
-          byId: options.current === undefined
-            ? {}
-            : { [options.current]: { blank: options.blank ?? true, cwd: options.cwd ?? UNGROUPED_CWD } },
-        }),
-      },
-      create,
-      open,
+  const sessions = {
+    list: {
+      getSnapshot: () => ({
+        byId: options.current === undefined
+          ? {}
+          : { [options.current]: { blank: options.blank ?? true, cwd: options.cwd ?? UNGROUPED_CWD } },
+      }),
     },
+    create,
+  }
+  const services: Record<string, unknown> = {
+    sessions,
+    uiSession: { adapter: { current: { getSnapshot: () => ({ key: options.current }) } } },
+    uiWorkspace: { openSession: open },
+    workspaces: { list: { getSnapshot: () => ({ items }) } },
+  }
+  const ctx = {
+    sessions,
     layout: { selectPanel },
     get: (name: string) => {
-      if (name !== 'workspaces' || options.workspacesAvailable === false)
-        return undefined
-      // inject-only 守卫的真实形态：未注入的服务名读属性即抛错。
-      if (options.workspacesThrows === true)
-        throw new Error('service "workspaces" is not injected')
-      return { list: { getSnapshot: () => ({ items }) } }
+      if (name === 'workspaces') {
+        if (options.workspacesAvailable === false)
+          return undefined
+        if (options.workspacesThrows === true)
+          throw new Error('service "workspaces" is not injected')
+      }
+      return services[name]
     },
   } as unknown as ClientContext
-  return { ctx, create, open, selectPanel }
+  return { ctx, adapter: defineAdapter(ctx), create, open, selectPanel }
 }
 
 afterEach(() => {
@@ -68,9 +75,9 @@ afterEach(() => {
 
 describe('startUngroupedSession', () => {
   it('没有当前会话时新建：只带未分组目录，不带 workspaceId', async () => {
-    const { ctx, create, open, selectPanel } = createCtx()
+    const { ctx, adapter, create, open, selectPanel } = createCtx()
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('session-new'))
     expect(create, '必须落到 $DSH_HOME/ungrouped，而不是桌面壳进程的 cwd').toHaveBeenCalledWith({ cwd: UNGROUPED_CWD })
@@ -78,53 +85,53 @@ describe('startUngroupedSession', () => {
   })
 
   it('当前会话已是「未分组目录下的空白会话」时复用，不再新造', async () => {
-    const { ctx, create, open } = createCtx({ current: UNGROUPED, blank: true })
+    const { ctx, adapter, create, open } = createCtx({ current: UNGROUPED, blank: true })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith(UNGROUPED))
     expect(create).not.toHaveBeenCalled()
   })
 
   it('当前空白会话的 cwd 是核心安装目录（历史遗留）时另起一条，不复用', async () => {
-    const { ctx, create, open } = createCtx({ current: UNGROUPED, blank: true, cwd: OTHER_CWD })
+    const { ctx, adapter, create, open } = createCtx({ current: UNGROUPED, blank: true, cwd: OTHER_CWD })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('session-new'))
     expect(create).toHaveBeenCalledWith({ cwd: UNGROUPED_CWD })
   })
 
   it('当前空白会话已归属某工作区时另起一条未分组会话', async () => {
-    const { ctx, create, open } = createCtx({ current: GROUPED, blank: true, sessionIds: [GROUPED] })
+    const { ctx, adapter, create, open } = createCtx({ current: GROUPED, blank: true, sessionIds: [GROUPED] })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('session-new'))
     expect(create).toHaveBeenCalledWith({ cwd: UNGROUPED_CWD })
   })
 
   it('当前会话非空白时另起一条未分组会话', async () => {
-    const { ctx, create } = createCtx({ current: UNGROUPED, blank: false })
+    const { ctx, adapter, create } = createCtx({ current: UNGROUPED, blank: false })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
   })
 
   it('工作区服务读不到时按「无法判断」处理：复用当前空白会话', async () => {
-    const { ctx, create, open } = createCtx({ current: UNGROUPED, blank: true, workspacesAvailable: false })
+    const { ctx, adapter, create, open } = createCtx({ current: UNGROUPED, blank: true, workspacesAvailable: false })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith(UNGROUPED))
     expect(create).not.toHaveBeenCalled()
   })
 
   it('工作区服务读取抛错（inject-only 守卫）时同样按「无法判断」处理，不阻断开会话', async () => {
-    const { ctx, create, open } = createCtx({ current: UNGROUPED, blank: true, workspacesThrows: true })
+    const { ctx, adapter, create, open } = createCtx({ current: UNGROUPED, blank: true, workspacesThrows: true })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith(UNGROUPED))
     expect(create).not.toHaveBeenCalled()
@@ -134,9 +141,9 @@ describe('startUngroupedSession', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const failure = new Error('route down')
     vi.mocked(getUngrouped).mockRejectedValue(failure)
-    const { ctx, create, open } = createCtx()
+    const { ctx, adapter, create, open } = createCtx()
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('session-new'))
     expect(create).toHaveBeenCalledWith()
@@ -145,9 +152,9 @@ describe('startUngroupedSession', () => {
 
   it('未分组目录为空串时同样退回无参创建', async () => {
     vi.mocked(getUngrouped).mockImplementation(async () => ({ cwd: '   ' }))
-    const { ctx, create, open } = createCtx()
+    const { ctx, adapter, create, open } = createCtx()
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith('session-new'))
     expect(create).toHaveBeenCalledWith()
@@ -159,9 +166,9 @@ describe('startUngroupedSession', () => {
     const failingCreate = async (): Promise<SessionId> => {
       throw failure
     }
-    const { ctx, open, selectPanel } = createCtx({ create: failingCreate })
+    const { ctx, adapter, open, selectPanel } = createCtx({ create: failingCreate })
 
-    startUngroupedSession(ctx)
+    startUngroupedSession(ctx, adapter)
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('未分组新建会话失败'), failure))
     expect(open).not.toHaveBeenCalled()

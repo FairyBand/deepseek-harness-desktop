@@ -20,7 +20,7 @@ const TITLE_SLOT = '[data-slot="sidebar.right.pane.tab.title"]'
 function scratchHome(): string {
   const home = resolve(inject('dshHome'))
   expect(dirname(home), '夹具只能写入系统临时目录的直接子目录').toBe(resolve(tmpdir()))
-  expect(basename(home), '夹具只能写入本轮编排创建的 dsh-e2e 隔离目录').toMatch(/^dsh-e2e-.+-[a-z0-9]+$/)
+  expect(basename(home), '夹具只能写入本轮编排创建的 dsh-e2e 隔离目录').toMatch(/^dsh-e2e-.+-[a-z0-9]+$/i)
   expect(inject('dshMounted'), '隔离宿主必须实际挂载被测 scheduler').toContain('dsh-tauri-scheduler')
   return home
 }
@@ -46,6 +46,44 @@ async function createScratchSession(): Promise<string> {
   })
   expect(created, '原生 RPC 只能在 scratch 内创建关联会话且必须回传相同身份').toMatchObject({ type: 'server-response', rpcId, result: { ok: true, value: { sessionId } } })
   return sessionId
+}
+
+async function seedCompletedSession(home: string): Promise<string> {
+  const coreRequire = createRequire(resolveDshCommand()[0]!)
+  const { Context } = coreRequire('@deepseek-ai/cordis')
+  const { SessionStore, SessionId } = coreRequire('@deepseek-ai/dsh-session')
+  const { createUserMessage } = coreRequire('@deepseek-ai/dsh-llm')
+  const jsonl = coreRequire('@deepseek-ai/dsh-session-persistence-jsonl')
+  const context = new Context()
+  try {
+    let persistence
+    if (typeof jsonl.apply === 'function') {
+      await jsonl.apply(context, { root: join(home, 'sessions') })
+      persistence = context.sessionPersistence
+    }
+    else {
+      const JsonlSessionPersistence = jsonl.default
+      persistence = new JsonlSessionPersistence(context, { root: join(home, 'sessions') })
+    }
+    const session = new SessionStore(context).create(SessionId(`session-${randomUUID()}`), { meta: { cwd: home } })
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('user/message', createUserMessage({ content: [{ type: 'text', text: '已结束的 UI 夹具消息，没有请求任何模型。' }], source: { kind: 'user', rpcId: randomUUID() } }), { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const handle = await persistence.create(session.header)
+    try {
+      await handle.append(session.snapshotEvents())
+      await handle.flush()
+    }
+    finally {
+      await handle.close()
+    }
+    return session.id
+  }
+  finally {
+    await context.fiber.dispose()
+  }
 }
 
 async function readTasks(): Promise<GetApiTauriSchedulerTasksResponse['tasks']> {
@@ -427,39 +465,9 @@ describe('C 当前 core 的定时任务主面板内联详情', () => {
   })
 
   it('会话提醒入口保留原生右栏身份与 37px 标签条，隐藏同会话跳转和冗余关闭并在刷新后恢复绑定', async () => {
+    const home = scratchHome()
+    const sessionId = await seedCompletedSession(home)
     await withScratchPage(async (app, prefix) => {
-      const coreRequire = createRequire(resolveDshCommand()[0]!)
-      const { Context } = coreRequire('@deepseek-ai/cordis')
-      const { SessionStore, SessionId } = coreRequire('@deepseek-ai/dsh-session')
-      const { createUserMessage } = coreRequire('@deepseek-ai/dsh-llm')
-      const { default: JsonlSessionPersistence } = coreRequire('@deepseek-ai/dsh-session-persistence-jsonl')
-      const home = scratchHome()
-      const context = new Context()
-      let sessionId: string
-      try {
-        const persistence = new JsonlSessionPersistence(context, { root: join(home, 'sessions') })
-        const session = new SessionStore(context).create(SessionId(`session-${randomUUID()}`), { meta: { cwd: home } })
-        session.append('turn/start', { turn: 1 })
-        session.append('step/start', { turn: 1, step: 1 })
-        session.append('user/message', createUserMessage({ content: [{ type: 'text', text: '已结束的 UI 夹具消息，没有请求任何模型。' }], source: { kind: 'user', rpcId: randomUUID() } }), { surfaceOp: 'append' })
-        session.append('step/end', { turn: 1, step: 1 })
-        session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-        const handle = await persistence.create(session.header)
-        try {
-          await handle.append(session.snapshotEvents())
-          await handle.flush()
-        }
-        finally {
-          await handle.close()
-        }
-        sessionId = session.id
-      }
-      finally {
-        await context.fiber.dispose()
-      }
-      const rpcId = randomUUID()
-      const adopted = await api<{ type: string, rpcId: string, result: { ok: boolean, value?: { sessionId: string } } }>('/api/session/create', 'POST', { type: 'client-request', rpcId, method: 'session/create', payload: { args: { request: { sessionId, cwd: home } } } })
-      expect(adopted, `真实 RPC 必须接管公开持久化夹具而不是创建另一个空白会话：${JSON.stringify(adopted)}`).toMatchObject({ type: 'server-response', rpcId, result: { ok: true, value: { sessionId } } })
       const name = `${prefix}-native`
       const created = await api<PostApiTauriSchedulerTasksResponse>(TASKS_PATH, 'POST', {
         name,
@@ -486,10 +494,12 @@ describe('C 当前 core 的定时任务主面板内联详情', () => {
       const tabId = await chip.getAttribute('data-dockkit-tab')
       if (!tabId)
         throw new Error('原生任务 Tab 缺少公共 data-dockkit-tab 标识')
-      const body = app.frame.locator(`[data-sidebar-right-tab=${JSON.stringify(tabId)}] ${BODY_SLOT}`)
+      const pane = app.frame.locator('[data-dockkit-pane]').filter({ has: chip })
+      const body = pane.locator(BODY_SLOT)
       await expect.poll(() => body.getByLabel('名称', { exact: true }).inputValue(), { timeout: 15_000, message: '同一公共 Tab 内容槽必须读取正确提醒任务' }).toBe(name)
       expect(await body.count(), '原生任务 Tab 内容不得重复挂载').toBe(1)
-      expect(await chip.locator('[data-sidebar-right-tab]').getAttribute('data-sidebar-right-tab'), '公共标题必须属于同一原生 Tab').toBe(tabId)
+      expect(await pane.count(), '原生任务标题与内容必须属于唯一的同一停靠面板').toBe(1)
+      expect(await pane.locator('[data-dockkit-tab][aria-selected="true"]').getAttribute('data-dockkit-tab'), '内容所在面板必须选中同一原生任务 Tab').toBe(tabId)
       const tabs = body.getByRole('tablist', { name: '任务详情', exact: true })
       expect(await tabs.evaluate(element => element.parentElement!.getBoundingClientRect().height), '会话已有标题栏时本地标签条必须恰好 37px').toBe(37)
       expect(await body.getByRole('button', { name: /^关联会话:/ }).count(), '会话内详情不得重复链接到自身会话').toBe(0)

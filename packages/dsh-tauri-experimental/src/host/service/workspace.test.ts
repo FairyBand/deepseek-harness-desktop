@@ -25,14 +25,12 @@ async function initRepo(path: string): Promise<void> {
   await run('git', ['-c', 'init.defaultBranch=main', 'init', '--quiet', path], { windowsHide: true })
 }
 
-/** 绑一个假宿主：`workspace.resolve` 的 cwd 只能来自宿主 SessionStore（get 优先，list 兜底）。 */
 function bindSessions(cwds: Record<string, string | undefined>): void {
   const rows = Object.entries(cwds).map(([id, cwd]) => ({ id, header: cwd === undefined ? {} : { cwd } }))
   disposers.push(server({
     webServer: { register: () => () => {} },
     sessions: {
       get: (id: string) => rows.find(row => row.id === id),
-      list: () => rows,
     },
   } as never))
 }
@@ -78,5 +76,26 @@ describe('workspace.resolve', () => {
     bindSessions({ 'session-missing': undefined, 'session-empty': '' })
     expect(await workspace.resolve('session-missing')).toEqual({ ok: false, reason: REASON_GIT_REQUIRED })
     expect(await workspace.resolve('session-empty')).toEqual({ ok: false, reason: REASON_GIT_REQUIRED })
+  })
+
+  it('does not resolve removed session cwd fields or list-only stores', async () => {
+    const root = await tempRoot()
+    await initRepo(root)
+    disposers.push(server({
+      webServer: { register: () => () => {} },
+      sessions: {
+        get: () => ({ id: 'legacy-cwd', header: {}, cwd: root }),
+        list: () => [{ id: 'list-only', header: { cwd: root } }],
+      },
+    } as never))
+    expect(workspace.peek('legacy-cwd')).toBe(true)
+    expect(await workspace.resolve('legacy-cwd')).toEqual({ ok: false, reason: REASON_GIT_REQUIRED })
+    disposers.pop()?.()
+    disposers.push(server({
+      webServer: { register: () => () => {} },
+      sessions: { list: () => [{ id: 'list-only', header: { cwd: root } }] },
+    } as never))
+    expect(workspace.peek('list-only')).toBe(false)
+    expect(await workspace.resolve('list-only')).toEqual({ ok: false, reason: REASON_GIT_REQUIRED })
   })
 })

@@ -154,7 +154,6 @@ export function isPluginUnloadError(error: unknown): boolean {
     && (error as { readonly code?: unknown }).code === 'INACTIVE_EFFECT'
 }
 
-/** 内核 `Session` 的日志面逐版本漂移：0.1.2-rc.1 起移除 `events` 访问器，以 `snapshotEvents()` 为准，`log` / `events` 仅作兜底。 */
 function sessionEvents(value: unknown): readonly SessionEventLike[] {
   if (typeof value !== 'object' || value === null)
     return []
@@ -165,9 +164,7 @@ function sessionEvents(value: unknown): readonly SessionEventLike[] {
     if (Array.isArray(snapshot))
       return snapshot as readonly SessionEventLike[]
   }
-  if (Array.isArray(session.log))
-    return session.log as readonly SessionEventLike[]
-  return Array.isArray(session.events) ? session.events as readonly SessionEventLike[] : []
+  return []
 }
 
 function textOf(event: SessionEventLike): string {

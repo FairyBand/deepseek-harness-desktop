@@ -92,8 +92,7 @@ interface HarnessOptions {
   insertable?: boolean
   retained?: boolean
   triggersAvailable?: boolean
-  /** 模拟 `0.1.5-rc.x`：动作面没有 captureInsertion，只有壳自身的 caretSpan。 */
-  legacyActions?: boolean
+  captureAvailable?: boolean
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -106,13 +105,12 @@ function harness(options: HarnessOptions = {}) {
   const sessionInput = {
     insertReference,
     state: occurrences,
-    ...options.legacyActions === true ? { caretSpan: () => ({ start: 5, end: 5 }) } : {},
   }
   const list = snapshotSource({ current: 's-1' as string | undefined })
   const binding = vi.fn((id: string) =>
     id === 's-1' && options.retained !== false ? { ctx: { scope: id } } : undefined)
   const provideInfo = vi.fn(() => ({
-    props: { inputActions: options.legacyActions === true ? {} : { captureInsertion: () => span } },
+    props: { inputActions: options.captureAvailable === false ? {} : { captureInsertion: () => span } },
   }))
   const registered: { source?: { name?: string, trigger?: string, codec?: { clipboardText: (ref: string) => string, serialize: (ref: string, signal: AbortSignal) => Promise<string> } } } = {}
   const triggers = {
@@ -287,15 +285,14 @@ describe('pasteCollapseFeature', () => {
     h.cleanup()
   })
 
-  it('0.1.5-rc.x 动作面没有 captureInsertion 时退回壳自身的 caretSpan，chip 仍插在光标处', () => {
-    const h = harness({ legacyActions: true })
+  it('captureInsertion 能力缺席时保留官方粘贴，不再构造旧版光标快照', () => {
+    const h = harness({ captureAvailable: false })
     const event = pasteEvent()
 
     h.paste(event)
 
-    expect(h.insertReference, '旧基线的折叠同样必须生效').toHaveBeenCalledTimes(1)
-    expect(h.insertReference.mock.calls[0]![1], '快照由 caretSpan + state.draftRev 组成').toEqual({ start: 5, end: 5, draftRev: 7 })
-    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(h.insertReference).not.toHaveBeenCalled()
+    expect(event.preventDefault).not.toHaveBeenCalled()
     h.cleanup()
   })
 

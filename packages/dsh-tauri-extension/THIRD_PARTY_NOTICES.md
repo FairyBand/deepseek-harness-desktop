@@ -25,10 +25,12 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the manager drives the official Host plugins instead of re-implementing them.
 
@@ -41,7 +43,7 @@ Official contracts used:
 - MCP config subset: the official `toolCallTimeoutMs`, `failOnStartupError`, `maxInstructionBytes` and `reconnect` keys are not surfaced yet.
 - MCP resources: left to the official `@deepseek-ai/dsh-mcp-resources`; this package adds no resource tooling.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The skill-filesystem source and MCP client source remain unchanged; provider configuration, policy calls, and the managed MCP subset require no migration.
 - The removed `./invariant` exports and subpath package metadata lookup have no local consumers. This package uses root plugin entries and does not fork the official plugin-manager runtime-resolution logic.

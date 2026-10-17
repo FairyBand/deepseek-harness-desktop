@@ -30,7 +30,8 @@ export * from './utils/cssr'
 export * from './utils/style'
 
 export const name = PLUGIN_ID
-export const inject = ['slots', 'layout', 'locale', 'sessions']
+// cordis 的 ctx.get 只放行已注入服务；漏声明会让 uiSession/uiWorkspace 投影静默失效。
+export const inject = ['slots', 'layout', 'locale', 'sessions', 'uiSession', 'uiWorkspace', 'workspaces']
 
 const COMPOSER_RESUME_EFFECT = `${PLUGIN_ID}: composer resume`
 const CONTINUE_NOTICE_EFFECT = `${PLUGIN_ID}: continue notice`

@@ -88,7 +88,7 @@ describe('navigationFeature', () => {
   it('dsh://session:new 走官方 startSession，其它 type 不触发', async () => {
     const startSession = vi.fn()
     const host = stubHost()
-    const ctx = ctxWithServices({ workspaces: { startSession } })
+    const ctx = ctxWithServices({ uiWorkspace: { startSession } })
 
     const dispose = navigationFeature.call(ctx)
     host.dispatch({ type: 'dsh://other' })
@@ -103,7 +103,7 @@ describe('navigationFeature', () => {
     const pickDirectory = vi.fn(async () => 'C:/ws')
     const create = vi.fn(async () => ({ workspaceId: 'ws-1' }))
     const host = stubHost()
-    const ctx = ctxWithServices({ workspaces: { startSession, pickDirectory, create } })
+    const ctx = ctxWithServices({ workspaces: { create }, uiWorkspace: { startSession, pickDirectory } })
 
     const dispose = navigationFeature.call(ctx)
     host.dispatch({ type: CMD_ADD_WORKSPACE })

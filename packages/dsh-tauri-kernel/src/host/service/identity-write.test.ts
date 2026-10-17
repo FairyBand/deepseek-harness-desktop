@@ -1,10 +1,10 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session as OfficialSession, SessionStore as OfficialSessionStore, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { KernelBinding } from '../../shared/types'
-import type { HostContext, PlatformLoader, RuntimeModules } from '../types'
+import type { HostContext, PlatformLoader } from '../types'
 import { Context } from '@deepseek-ai/cordis'
 import * as llmModule from '@deepseek-ai/dsh-llm'
-import { SessionLogOffset } from '@deepseek-ai/dsh-session'
+import * as sessionModule from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { getServerContext } from 'dsh-h3/utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,9 +16,7 @@ import { identity } from './identity'
 vi.mock('dsh-h3/utils', () => ({ getServerContext: vi.fn() }))
 vi.mock('../server', () => ({ server: vi.fn() }))
 
-const currentSessionPackage: string = 'dsh-session-current'
-const sessionModule = await import(currentSessionPackage) as unknown as typeof import('@deepseek-ai/dsh-session') & Required<Pick<RuntimeModules, 'appendPluginRecord' | 'pluginRecordOf'>>
-const { Session, SessionId, SessionStore } = sessionModule
+const { Session, SessionId, SessionLogOffset, SessionStore } = sessionModule
 const binding: KernelBinding = { backend: 'codex', nativeSessionId: 'native-a', sessionId: 'session-a' }
 let context: Context
 let sessions: OfficialSessionStore

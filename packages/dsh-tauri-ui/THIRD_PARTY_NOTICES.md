@@ -3,16 +3,18 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
-- Not copied: a Tauri-flavoured refork of the official client UI — official components are re-exported as-is where both kernel generations agree, reforked locally where only the newer kernel implements or exports them; no official source file is vendored.
+- Not copied: a Tauri-flavoured refork of the official client UI — official components are re-exported where the supported kernels expose the required contract, with local reforks for additional geometry and variants; no official source file is vendored.
 
 Derived (upstream → this package):
 
-- `packages/client/ui-primitives/src/` (version `0.1.7-alpha.1`, ≥ `0.1.5-rc.1`) → `src/client/components/official.tsx`: pass-through re-export of `Button`, `Switch`, `Tag`, `Pill`, `Menu`, `Input`, `Tooltip`, `Toast`, `Modal`, `HoverCard`, `DisclosureRow`, `StateDot`, `ConnectionIndicator`, `BrandWordmark`, `FishLogo`; `Button` / `Tag` are taken over per-variant by `button.tsx` / `tag.tsx` (official variant → official implementation, local variant → refork style).
+- `packages/client/ui-primitives/src/` (historical derivation reference: `0.1.7-alpha.1`, then documented for ≥ `0.1.5-rc.1`; not the current support floor) → `src/client/components/official.tsx`: pass-through re-export of `Button`, `Switch`, `Tag`, `Pill`, `Menu`, `Input`, `Tooltip`, `Toast`, `Modal`, `HoverCard`, `DisclosureRow`, `StateDot`, `ConnectionIndicator`, `BrandWordmark`, `FishLogo`; `Button` / `Tag` are taken over per-variant by `button.tsx` / `tag.tsx` (official variant → official implementation, local variant → refork style).
 - `packages/client/ui-primitives/src/` icons barrel → deliberately not re-exported (export names differ between kernel generations).
 - `packages/client/ui-plugin-manager/src/client/PluginManagerPage.module.css` → `src/client/ui/panel-page.cssr.ts`, `src/client/ui/panel-page.tsx`: the plugin panel is laid out line-by-line on the official plugin page geometry.
 - `packages/client/ui-sidebar`, `ui-workspace`, `ui-chat`, `ui-settings-models`, `ui-agent-preset`, `ui-permission-presets`, `ui-goal` CSS Modules → `src/client/components/registry.ts` (`UI_COMPONENT_REGISTRY`, `kind: 'reexport' | 'refork'`, `mappedClass`) plus `src/client/components/*.cssr.ts`: reforked geometry and official class mapping on this repo's `css-render` stack; official `.module.css` files are not copied.
@@ -21,9 +23,9 @@ Derived (upstream → this package):
 - Official settings launcher seat (`ui-settings-general` `SettingsRoot` rendering the account menu) → `src/client/constants/index.ts` (`SETTINGS_TRIGGER_PRIORITY`), `src/client/ui/settings-trigger.tsx`: seat takeover keeping a host for the official account UI, plus the official dictionary strings for the sidebar "new session" button and the ungrouped workspace-group `+` (`new-session.utils.ts`, official `UNGROUPED_KEY`).
 - Official primitives variants `PermissionRow.selector`, `PermissionSelect`, `AgentPresetSeat` → `src/client/components/chip.tsx`: per-variant wrapping and the official `@container` query that `css-render` can only emit as a top-level raw rule.
 
-## Schedule-detail refork (`0.2.1-alpha.1`)
+## Historical schedule-detail refork (`0.2.1-alpha.1`)
 
-- Release-matched revision: `ec48669f48ac81bac353fc646e7cf9c57241242f` from <https://github.com/deepseek-ai/deepseek-harness>.
+- Historical source revision: `ec48669f48ac81bac353fc646e7cf9c57241242f` from <https://github.com/deepseek-ai/deepseek-harness>.
 - `packages/client/ui-schedule/src/client/DatePicker.tsx`, `ClockPicker.tsx` and `TaskManagerPage.module.css` → `src/client/components/date-picker.tsx`, `time-picker.tsx`, `picker-popover.tsx`, and the `SegmentedControl` underline variant: calendar/clock geometry, native anchored popovers, keyboard interaction and rule/history strip.
 - Date/calendar trigger uses the existing shared `Calendar` glyph because the installed official primitives do not export its calendar glyph; clock and chevrons use the public official exports. Recurring local tasks add minute-only clock precision to preserve the existing `HH:mm` host contract.
 - Existing `Checkbox` default geometry remains unchanged; `size="xs"` is a local compact extension for weekday options.
@@ -67,7 +69,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The official primitives re-exports receive the StateDot restart fix without a local fork. InlineEditor is additive; no existing primitive export used here is removed.
 - The target adds the optional `shell.bottom` seat without changing the settings launcher, hero workspace, or panel seats used here. The composer `stats` split has no local replacement registration.

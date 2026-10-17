@@ -2,7 +2,6 @@ import type { ClientAdapter, ClientContext, SessionId } from 'dsh-tauri/client'
 import { PLUGIN_ID } from '../../shared/constants'
 import { getUngrouped } from '../apis'
 
-/** 会话列表快照中本服务读取的字段（`current` 在 0.1.7 由适配层投影补回）。 */
 interface ListSnapshotLike {
   current?: SessionId
   byId?: Record<string, { blank?: boolean, cwd?: string } | undefined>
@@ -15,15 +14,11 @@ interface ListSnapshotLike {
  * 不显式传 `cwd` 时宿主退回 `process.cwd()`——桌面壳把该进程的 cwd 固定为核心安装目录
  * （版本切换时需持住目录句柄），未分组会话就会落进核心目录这一伪项目。目录由宿主在建会话
  * 前 `mkdir -p`，无需客户端预热；路由不可用时退回旧行为并告警。
- *
- * `adapter` 负责跨内核代的会话能力：`open` 在 ≤0.1.6 位于 `sessions`，0.1.7 收进
- * `uiWorkspace.openSession`；列表快照的 `current` 在 0.1.7 也改由 `uiSession` 投影补回。
- * 省略 `adapter` 时回退原生 `ctx.sessions`（旧内核与单测路径）。
  */
-export function startUngroupedSession(ctx: ClientContext, adapter?: ClientAdapter): void {
+export function startUngroupedSession(ctx: ClientContext, adapter: ClientAdapter): void {
   void connectUngroupedSession(ctx, adapter).then(
     (sessionId) => {
-      openSession(ctx, adapter, sessionId)
+      adapter.openSession(sessionId)
       ctx.layout.selectPanel(null)
     },
     (reason: unknown) => {
@@ -32,7 +27,7 @@ export function startUngroupedSession(ctx: ClientContext, adapter?: ClientAdapte
   )
 }
 
-async function connectUngroupedSession(ctx: ClientContext, adapter?: ClientAdapter): Promise<SessionId> {
+async function connectUngroupedSession(ctx: ClientContext, adapter: ClientAdapter): Promise<SessionId> {
   const cwd = await resolveUngroupedCwd()
   const current = snapshotOf(ctx, adapter).current
   if (current !== undefined && isUngroupedBlank(ctx, adapter, current, cwd))
@@ -42,7 +37,7 @@ async function connectUngroupedSession(ctx: ClientContext, adapter?: ClientAdapt
 
 function isUngroupedBlank(
   ctx: ClientContext,
-  adapter: ClientAdapter | undefined,
+  adapter: ClientAdapter,
   sessionId: SessionId,
   cwd: string | undefined,
 ): boolean {
@@ -69,18 +64,8 @@ async function resolveUngroupedCwd(): Promise<string | undefined> {
   }
 }
 
-/** 打开已有会话：适配层优先（0.1.7 走 `uiWorkspace.openSession`），缺席时回退原生成员。 */
-function openSession(ctx: ClientContext, adapter: ClientAdapter | undefined, sessionId: SessionId): void {
-  if (adapter !== undefined) {
-    adapter.openSession(sessionId)
-    return
-  }
-  const native = ctx.sessions as unknown as { open?: (id: SessionId) => unknown }
-  native.open?.(sessionId)
-}
-
-function snapshotOf(ctx: ClientContext, adapter?: ClientAdapter): ListSnapshotLike {
-  const list = adapter?.sessions.list ?? ctx.sessions.list
+function snapshotOf(ctx: ClientContext, adapter: ClientAdapter): ListSnapshotLike {
+  const list = adapter.sessions.list ?? ctx.sessions.list
   return (list.getSnapshot() ?? {}) as ListSnapshotLike
 }
 

@@ -93,17 +93,17 @@ describe('download URL builders', () => {
   })
 
   it('builds the packaged zip URL list (GitHub official → every proxy mirror)', () => {
-    const asset = 'https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/download/dsh-0.1.2-rc.1-1/deepseek-harness-pkg-linux.zip'
-    expect(dshZipDownloadUrls('dsh-tauri-desk/deepseek-harness-pkg', 'dsh-0.1.2-rc.1-1', 'deepseek-harness-pkg-linux.zip')).toEqual([
+    const asset = 'https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/download/dsh-0.2.1-rc.1-39009013600/deepseek-harness-pkg-linux.zip'
+    expect(dshZipDownloadUrls('dsh-tauri-desk/deepseek-harness-pkg', 'dsh-0.2.1-rc.1-39009013600', 'deepseek-harness-pkg-linux.zip')).toEqual([
       asset,
       ...DSH_MIRROR_PREFIXES.map(prefix => `${prefix}${asset}`),
     ])
   })
 
   it('builds the npm tarball URL pair for the arm64 kind', () => {
-    expect(dshNpmTarballUrls('@deepseek-ai/dsh', '0.1.2-rc.1')).toEqual([
-      'https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz',
-      'https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz',
+    expect(dshNpmTarballUrls('@deepseek-ai/dsh', '0.2.1-rc.1')).toEqual([
+      'https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.1.tgz',
+      'https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.2.1-rc.1.tgz',
     ])
   })
 })

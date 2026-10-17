@@ -155,16 +155,19 @@ describe('守卫：档案缺失才新建，已存在只切换，失败即中止'
 
 describe('更新提示入口（桌面外壳 / 调试页）走同一守卫', () => {
   for (const [name, source] of [['layout', layoutSource], ['debug', debugSource]] as const) {
-    it(`${name}：「立即更新」先确认、再落档案、更新失败回滚`, () => {
+    it(`${name}：「立即更新」只走档案守卫，落档案后更新、失败回滚`, () => {
       const body = updateBody(source)
+      const guardIndex = body.indexOf('await guardCoreUpgrade(info.tag)')
+      const updateIndex = body.indexOf('if (!(await store.harnessUpdater.handleUpdate()))')
+      const rollbackIndex = body.indexOf('await guard.rollback?.()')
 
-      expect(body).toContain('confirmCoreBreaking(info.tag)')
-      expect(body).toContain('guardCoreUpgrade(info.tag)')
-      expect(body).toMatch(/if \(!guard\)\n\s*return/)
-      expect(body).toContain('if (!(await store.harnessUpdater.handleUpdate()))')
-      expect(body).toContain('await guard.rollback?.()')
-      // 守卫的弹窗必须挂进渲染树，否则 useOverlay 的 holder 无处可渲染
-      expect(source).toContain('{coreProfileSwitchHolder}')
+      expect(source, '不得再次叠加已废弃的版本确认').not.toContain('confirmCoreBreaking')
+      expect(guardIndex, '更新前必须调用档案守卫').toBeGreaterThan(-1)
+      expect(updateIndex, '必须先落定档案，再更新核心').toBeGreaterThan(guardIndex)
+      expect(body.slice(guardIndex, updateIndex), '取消或档案切换失败必须阻断更新').toMatch(/if \(!guard\)\n\s*return/)
+      expect(rollbackIndex, '核心更新失败后必须回滚档案').toBeGreaterThan(updateIndex)
+      expect(body.slice(updateIndex, rollbackIndex), '档案回滚只能发生在更新未切换的分支').not.toContain('}')
+      expect(source, '档案守卫对话框必须挂进渲染树').toContain('{coreProfileSwitchHolder}')
     })
   }
 

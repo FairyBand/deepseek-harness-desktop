@@ -92,12 +92,7 @@ export const harnessUpdater = defineStore({
       this.updateInfo = null
     },
 
-    /**
-     * 展示「发现新版本」提示条。
-     * onUpdate 由调用方（持有破坏性更改确认弹窗的组件）注入：点击「立即更新」时
-     * 先确认（高于 rc.2 则弹框），确认后才真正安装；未注入时回退为直接更新。
-     */
-    showToast(onUpdate?: () => void) {
+    showToast(onUpdate: () => void) {
       if (!this.updateInfo)
         return
       toast(t('update.available', { tag: this.updateInfo.tag }), {
@@ -105,10 +100,7 @@ export const harnessUpdater = defineStore({
           children: t('update.now'),
           onPress: () => {
             toast.clear()
-            if (onUpdate)
-              void onUpdate()
-            else
-              void this.handleUpdate()
+            onUpdate()
           },
           variant: 'tertiary',
         },

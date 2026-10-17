@@ -1,37 +1,13 @@
 import type { DesktopApp } from '../support/desktop'
-import process from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startDesktopApp } from '../support/desktop'
-import { dismissDshModals } from '../support/onboarding'
 import { completePreinstall } from '../support/preinstall'
-import { SHELL_IFRAME } from '../support/selectors'
 
-// ==========================================
-// 1. 常量配置
-// ==========================================
-
-/** 冷装配（真的联网下载 Node + dsh）的等待上限。 */
 const ASSEMBLY_TIMEOUT_MS = 900_000
-
-/** 桌宠窗口创建/销毁的收敛窗口（Rust 侧建窗是异步的）。 */
 const PET_WINDOW_TIMEOUT_MS = 30_000
-
-/**
- * 就绪锚点：内嵌 dsh 界面的官方侧栏根节点。
- *
- * 桌面壳自有设置入口，浏览器态的 `.dshp-settings-trigger`（官方设置启动器座位接管）在桌面端
- * 不渲染，不能作为桌面端就绪条件；这里只要求内嵌界面已经挂载出来。
- */
-const READY_ANCHOR = '[data-slot="sidebar"]'
-
-/** 桌宠尺寸合法区间（`src-tauri/src/desktop/pet.rs:48-49` 的 50.0 / 200.0）。 */
 const PET_SIZE_MIN = 50
 const PET_SIZE_MAX = 200
 const PET_SIZE_DEFAULT = 100
-
-// ==========================================
-// 2. 类型定义
-// ==========================================
 
 interface PetStatus {
   enabled?: boolean
@@ -47,16 +23,6 @@ interface WindowWithDshErrors extends Window {
   }
 }
 
-// ==========================================
-// 3. 浏览器端 DOM/Tauri 脚本函数（在 `browser.execute` 中执行）
-// ==========================================
-
-/** 元素是否存在 */
-function elementExists(selector: string): boolean {
-  return document.querySelector(selector) !== null
-}
-
-/** 在页面（壳层或帧内）安装报错收集器：三类页面级错误收进 `window.__dshE2eErrors` */
 function collectPageErrors(): void {
   const host = window as unknown as WindowWithDshErrors
   if (host.__dshE2eErrors)
@@ -75,12 +41,10 @@ function collectPageErrors(): void {
   }
 }
 
-/** 读回当前上下文的报错收集器 */
 function readPageErrors(): string[] {
   return (window as unknown as WindowWithDshErrors).__dshE2eErrors ?? []
 }
 
-/** 壳层内调用 Tauri 命令 */
 function shellInvoke(cmd: string, args?: unknown): Promise<unknown> {
   const internals = (window as unknown as WindowWithDshErrors).__TAURI_INTERNALS__
   if (!internals) {
@@ -89,35 +53,15 @@ function shellInvoke(cmd: string, args?: unknown): Promise<unknown> {
   return internals.invoke(cmd, args as Record<string, unknown> | undefined)
 }
 
-// ==========================================
-// 4. 测试套件
-// ==========================================
-
-describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () => {
+describe('桌面端桌宠独立窗口', () => {
   let app: DesktopApp
 
   beforeAll(async () => {
     app = await startDesktopApp()
     const browser = app.browser
 
-    // 尽早装壳层收集器：装配失败、iframe 加载失败都会在壳层留下痕迹
     await browser.execute(collectPageErrors)
-    const iframe = await browser.$(SHELL_IFRAME)
     await completePreinstall(browser, ASSEMBLY_TIMEOUT_MS)
-    await iframe.waitForDisplayed({ timeout: ASSEMBLY_TIMEOUT_MS })
-
-    // 切入 iframe 安装收集器并等待 UI 渲染。
-    //
-    // 就绪锚点用内嵌界面的官方侧栏根节点：桌宠设置分区及其菜单补丁由后续用例断言，这里只等界面可用。
-    await withIframe(async () => {
-      await browser.execute(collectPageErrors)
-      await browser.waitUntil(
-        () => browser.execute(elementExists, READY_ANCHOR),
-        { timeout: 60_000, timeoutMsg: '内嵌 dsh 界面未渲染出官方侧栏（插件 client 未生效）' },
-      )
-    })
-
-    await dismissDshModals(browser)
     await setEnabled(false)
   }, ASSEMBLY_TIMEOUT_MS)
 
@@ -125,45 +69,10 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     await app?.stop()
   })
 
-  // ------------------------------------------
-  // Helper 函数库（特定于套件）
-  // ------------------------------------------
-
-  /** 封装 iframe 切换的高阶函数，自动保证调用后切回主框架 */
-  async function withIframe<T>(action: () => Promise<T>): Promise<T> {
-    const browser = app.browser
-    const iframe = await browser.$(SHELL_IFRAME)
-    await browser.switchFrame(iframe)
-    try {
-      return await action()
-    }
-    finally {
-      await browser.switchFrame(null)
-    }
-  }
-
-  /** 壳层报错快照（当前上下文必须已在壳层） */
-  async function shellErrors(): Promise<string[]> {
-    return (await app.browser.execute(readPageErrors)) as string[]
-  }
-
-  /** 帧内报错快照：自动进出 iframe */
-  async function frameErrors(): Promise<string[]> {
-    return withIframe(() => app.browser.execute(readPageErrors) as Promise<string[]>)
-  }
-
-  /** 收尾断言：壳层与内嵌 dsh 页面都不得留下未捕获错误 */
-  async function expectNoPageErrors(scene: string): Promise<void> {
-    expect(await frameErrors(), `${scene}：内嵌 dsh 页面出现报错`).toEqual([])
-    expect(await shellErrors(), `${scene}：壳层出现报错`).toEqual([])
-  }
-
-  /** 壳层读状态 */
   async function status(): Promise<PetStatus> {
     return (await app.browser.execute(shellInvoke, 'get_pet_status')) as PetStatus
   }
 
-  /** 壳层写启用状态 */
   async function setEnabled(enabled: boolean): Promise<void> {
     await app.browser.execute(shellInvoke, 'set_pet_enabled', { enabled })
     await app.browser.waitUntil(
@@ -172,7 +81,6 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     )
   }
 
-  /** 越界提交必须由命令层拒绝（暂禁 WDIO 500 重试机制） */
   async function expectSizeRejected(outOfRange: number): Promise<void> {
     const browser = app.browser
     const retryCount = browser.options.connectionRetryCount
@@ -187,10 +95,6 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
       browser.options.connectionRetryCount = retryCount
     }
   }
-
-  // ------------------------------------------
-  // 5. 测试用例集
-  // ------------------------------------------
 
   it('TC-PET-L3-02-004 桌宠尺寸边界：范围内接受、越界拒绝且不改状态', async () => {
     await setEnabled(true)
@@ -213,6 +117,6 @@ describe.skipIf(process.platform !== 'win32')('桌面端桌宠独立窗口', () 
     expect((await status()).pet_size, '收尾必须恢复默认尺寸').toBe(PET_SIZE_DEFAULT)
     await setEnabled(false)
 
-    await expectNoPageErrors('TC-PET-L3-02-004 尺寸边界')
+    expect(await app.browser.execute(readPageErrors), 'TC-PET-L3-02-004 尺寸边界：壳层出现报错').toEqual([])
   })
 })

@@ -14,7 +14,7 @@ import { getServerContext } from 'dsh-h3/utils'
 import { defineService } from 'dsh-tauri'
 import { join } from 'pathe'
 import { server } from '../server'
-import { loadSchedulerRuntimeModules, resolveSetupAgent } from '../utils/agent-runtime'
+import { loadSchedulerRuntimeModules } from '../utils/agent-runtime'
 import { applyUnattendedPermission } from '../utils/permission'
 import { decideRunOutcome, isPluginUnloadError, summarizeCollectedRun, waitForTurnStart, watchSessionEvents } from './executor.utils'
 import { runs } from './runs'
@@ -218,12 +218,11 @@ async function createAgent(
     sessionId: input.sessionId,
     meta: { cwd: input.cwd, agentPreset: input.agentPreset },
     agentOptions: input.selection ? { provider: input.selection.provider, model: input.selection.model } : {},
-    setup: async (agentCtx: any, createdAgent?: SetupAgentLike) => {
-      await (ctx.agentPresets as { mount?: (agentCtx: unknown, presetId: string) => Promise<unknown> } | undefined)?.mount?.(agentCtx, input.agentPreset)
-      runtime.installModelSelection(agentCtx, { current: input.selection, assembled: undefined })
-      const agent = resolveSetupAgent(agentCtx, createdAgent)
+    setup: async (agentCtx: unknown, agent: SetupAgentLike) => {
       if (!agent)
         throw new Error('scheduler setup has no scoped Agent')
+      await (ctx.agentPresets as { mount?: (agentCtx: unknown, presetId: string) => Promise<unknown> } | undefined)?.mount?.(agentCtx, input.agentPreset)
+      runtime.installModelSelection(agentCtx, { current: input.selection, assembled: undefined })
       applyUnattendedPermission(
         ctx.permissionPresets as PermissionPresetService,
         agent.session,

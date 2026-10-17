@@ -67,7 +67,12 @@ pub fn run() -> Result<(), String> {
     // 否则首次 get_dsh_data_path 会落到默认目录，日志、store 与 shim 全部写错位置。
     service::data_dir::restore_process_env();
 
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
+    if let Some(directory) = config::e2e_app_data_dir()? {
+        context.config_mut().app.app_directories_override = Some(
+            tauri::utils::config::AppDirectoriesOverride::Root(directory),
+        );
+    }
     log::info!(
         "STARTUP_BOOT: name=context_ready elapsed_ms={}",
         started.elapsed().as_millis()

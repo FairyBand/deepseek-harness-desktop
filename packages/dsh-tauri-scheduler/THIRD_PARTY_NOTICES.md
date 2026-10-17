@@ -6,7 +6,7 @@
 - Version: `0.1.42`
 - Revision: `e75499e55d0b8bfe85e04ba5a579080b54edff56`
 - Baseline adopted: `f1bc91a3437f0b952631a46a8363089587b9ae6a` (`v0.1.32`)
-- Baseline follow-up: `c426c3d` (`v0.1.35`, DSH `0.1.5-rc.1` host compatibility)
+- Baseline follow-up (historical): `c426c3d` (`v0.1.35`, DSH `0.1.5-rc.1` host compatibility); not the current support floor.
 - Source: `source/dsh-automation`
 - License: Apache-2.0 — Copyright 2026 MichengAI contributors
 - Adapted: the scheduled-task panel; the submodule pointer is independent of the adopted baseline.
@@ -45,10 +45,12 @@ Copyright 2026 MichengAI contributors
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
+- Refork version (historical source): `dsh-v0.2.1-alpha.1`
 - Refork revision: `ec48669f48ac81bac353fc646e7cf9c57241242f`
-- Reference: the release-matched source at this revision; the repository submodule pointer is not advanced by this refork.
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` ([`pnpm-workspace.yaml`](../../pnpm-workspace.yaml))
+- Reference: the refork used the source at the revision above; that provenance is independent of the current compatibility reference.
+- Compatibility reference: `dsh-v0.2.1-rc.1` (`1600d8a1e140dcde43a1a0941940a0480712c011`).
+- Support policy: minimum core `0.1.7-rc.1`; earlier cores are unsupported. See the [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>) for verification scope; this does not imply a fresh refork or source equality.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` ([`pnpm-workspace.yaml`](<../../pnpm-workspace.yaml>))
 - License: MIT — Copyright (c) 2026 DeepSeek
 
 Reforked contracts and local destinations:

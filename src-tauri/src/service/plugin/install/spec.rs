@@ -1,7 +1,3 @@
-//! 安装 spec 准备：本地目录 spec 的判定与规范化（统一改写成 `link:` 绝对路径）、
-//! 内置插件捆绑目录解析、GitHub 简写规范化（绕开 pnpm 的 HTTPS→SSH 回退缺陷）
-//! 与 Windows 下含空格 spec 的引号化（dsh CLI 只在 win32 用 shell 拼接参数）。
-
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
@@ -278,65 +274,6 @@ pub(super) fn normalize_git_spec(spec: &str) -> String {
     url
 }
 
-/// `dsh plugin` 仍把 pnpm 参数拼进 shell 的最后一个核心版本（开区间上界）。
-///
-/// 该版本起 `dsh plugin` 改经 `@deepseek-ai/dsh-plugin-manager`、用 execa 以
-/// **argv 数组**启动 pnpm，并在 Windows 上自行按 cmd 规则转义参数
-/// （`arguments/command-file.js`），spec 因此必须原样透传。
-const SHELL_JOINED_PNPM_CLI_BELOW: &str = "0.1.6-alpha.2";
-
-/// 活动核心的 `dsh plugin` 是否把 pnpm 参数拼成命令行交给 shell。
-///
-/// - `< 0.1.6-alpha.2`（0.1.5-rc.2 / 0.1.6-alpha.1 等）：JS 里
-///   `spawnSync("pnpm", args, { shell: process.platform === "win32" })`，Node 对
-///   `shell:true` 只按空格拼接、不做引号转义（DEP0190），含空格的 spec 不预加引号
-///   就会被切碎成多个 spec。
-/// - `>= 0.1.6-alpha.2`：参数作为单个 argv 直达 pnpm，spec 里的字面 `"` 会被当成
-///   包名的一部分 → `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER`（issue #647）。
-///
-/// 版本读不到 / 解析失败时按新核心处理：预加引号对新核心是**必然失败**，不预加
-/// 引号只在「老核心 + 含空格安装路径」这一组合下失败。
-pub(super) fn joins_pnpm_args_in_shell(core_version: Option<&str>) -> bool {
-    let Ok(threshold) = semver::Version::parse(SHELL_JOINED_PNPM_CLI_BELOW) else {
-        return false;
-    };
-    core_version
-        .and_then(|version| semver::Version::parse(version).ok())
-        .is_some_and(|actual| actual < threshold)
-}
-
-/// 给含空白字符的依赖 spec 加内嵌双引号，使其在 shell 拼接后仍保持单一 token。
-///
-/// 只对「把参数拼进 shell 的老核心」且「Windows」成立：老核心在 win32 用
-/// `shell:true` 启动 pnpm，内置插件的 `link:<应用安装目录>` 一旦含空格就会被切碎
-/// （pnpm 报 `ERR_PNPM_SPEC_NOT_SUPPORTED`），包一层双引号让 cmd 把整条 spec 视为
-/// 单一 token；pnpm 解析后自行剥离引号，落盘 `package.json` 的值仍是不带引号的
-/// `link:<路径>`（与 [`bundled_dep_spec`] 的内核对账一致）。
-///
-/// 新核心与 macOS / Linux（老核心在 mac 上也是 `shell:false`）都是 argv 数组直达
-/// pnpm、空格天然保留，加引号反而把字面 `"` 当成包名的一部分传给 pnpm → 非法
-/// spec → exit 1，这是 issue #104 的根因（内置插件指向 `/Applications/Deepseek
-/// Harness Desktop.app/...`）。因此调用方必须经 [`spec_argument`] 按核心版本决定。
-pub(super) fn shell_quote_spec(spec: &str) -> String {
-    #[cfg(windows)]
-    {
-        if spec.chars().any(|c| c == ' ' || c == '\t') {
-            return format!("\"{spec}\"");
-        }
-    }
-    spec.to_string()
-}
-
-/// 传给 `dsh plugin add` 的最终参数：只有把参数拼进 shell 的老核心才预加引号
-/// （见 [`joins_pnpm_args_in_shell`] 与 [`shell_quote_spec`]）。
-pub(super) fn spec_argument(spec: &str, core_version: Option<&str>) -> String {
-    if joins_pnpm_args_in_shell(core_version) {
-        shell_quote_spec(spec)
-    } else {
-        spec.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,26 +315,24 @@ mod tests {
 
     #[test]
     fn install_spec_pins_recommended_range_for_current_core() {
-        // 清单矩阵声明的该代推荐区间必须钉进 spec：裸包名会让 pnpm 装 latest
-        // （核心 0.1.7-rc.1 该装 ^0.21.1，registry 的 latest 却还是 0.19.x）
         let mut p = preset("dsh-better-sidebar", "dsh-better-sidebar", false);
         p.version = Some(PluginVersion::Matrix(vec![
-            VersionPair {
-                version: "^0.19.1".into(),
-                dsh: "^0.1.5-rc.1".into(),
-            },
             VersionPair {
                 version: "^0.21.1".into(),
                 dsh: "^0.1.7-rc.1".into(),
             },
+            VersionPair {
+                version: "^0.22.0".into(),
+                dsh: "^0.2.1-rc.1".into(),
+            },
         ]));
-        assert_eq!(
-            preset_spec_for_install(&p, None, Some("0.1.5-rc.3")).unwrap(),
-            "dsh-better-sidebar@^0.19.1"
-        );
         assert_eq!(
             preset_spec_for_install(&p, None, Some("0.1.7-rc.1")).unwrap(),
             "dsh-better-sidebar@^0.21.1"
+        );
+        assert_eq!(
+            preset_spec_for_install(&p, None, Some("0.2.1-rc.1")).unwrap(),
+            "dsh-better-sidebar@^0.22.0"
         );
         // scope 包名同样支持；核心没有任何命中区间时退回裸 spec
         let mut scoped = preset("@xmanrui/dsh-im", "@xmanrui/dsh-im", false);
@@ -418,7 +353,12 @@ mod tests {
         // issue #715：清单区间本身就带 `^`，拼接只能再加一个 `@`——出现 `^^` 会让 pnpm
         // 报 ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER，而预设插件共用同一条 `add`
         // 调用，一个坏 spec 就让整批预设都装不上（应用卡在加载中，见 issue #716）。
-        for core in ["0.1.5-rc.3", "0.1.7-rc.1", "0.1.7-rc.2", "0.2.0"] {
+        for core in [
+            "0.1.7-rc.1",
+            "0.1.7-rc.2",
+            "0.2.1-rc.1",
+            "0.3.0",
+        ] {
             let spec = preset_spec_for_install(&p, None, Some(core)).unwrap();
             assert!(!spec.contains("^^"), "core={core}: {spec}");
         }
@@ -430,24 +370,24 @@ mod tests {
         let mut git = preset("probe", "git+https://github.com/o/r.git", false);
         git.version = Some(PluginVersion::Matrix(vec![VersionPair {
             version: "^1.2.0".into(),
-            dsh: "^0.1.5-rc.1".into(),
+            dsh: "^0.1.7-rc.1".into(),
         }]));
         assert_eq!(
-            preset_spec_for_install(&git, None, Some("0.1.6")).unwrap(),
+            preset_spec_for_install(&git, None, Some("0.1.7-rc.1")).unwrap(),
             "git+https://github.com/o/r.git"
         );
 
         let mut versioned = preset("probe", "probe@1.0.0", false);
         versioned.version = git.version.clone();
         assert_eq!(
-            preset_spec_for_install(&versioned, None, Some("0.1.6")).unwrap(),
+            preset_spec_for_install(&versioned, None, Some("0.1.7-rc.1")).unwrap(),
             "probe@1.0.0"
         );
 
         let mut link = preset("probe", "link:C:/deps/probe", false);
         link.version = git.version.clone();
         assert_eq!(
-            preset_spec_for_install(&link, None, Some("0.1.6")).unwrap(),
+            preset_spec_for_install(&link, None, Some("0.1.7-rc.1")).unwrap(),
             "link:C:/deps/probe"
         );
     }
@@ -480,6 +420,32 @@ mod tests {
             preset_spec_for_install(&p, Some(dir), None).unwrap(),
             "link:C:/Apps/dsh/resources/internal-plugins/dsh-tauri"
         );
+    }
+
+    #[test]
+    fn install_spec_keeps_space_paths_bare_for_supported_cores() {
+        let preset = preset("dsh-tauri", "dsh-tauri", true);
+        for core in [
+            Some("0.1.7-rc.1"),
+            Some("0.2.1-rc.1"),
+            None,
+        ] {
+            for (path, expected) in [
+                (
+                    "C:/Program Files/DeepSeek Harness Desktop/resources/node_modules/dsh-tauri",
+                    "link:C:/Program Files/DeepSeek Harness Desktop/resources/node_modules/dsh-tauri",
+                ),
+                (
+                    "/Applications/DeepSeek Harness Desktop.app/Contents/Resources/resources/node_modules/dsh-tauri",
+                    "link:/Applications/DeepSeek Harness Desktop.app/Contents/Resources/resources/node_modules/dsh-tauri",
+                ),
+            ] {
+                assert_eq!(
+                    preset_spec_for_install(&preset, Some(PathBuf::from(path)), core).unwrap(),
+                    expected
+                );
+            }
+        }
     }
 
     #[test]
@@ -546,84 +512,6 @@ mod tests {
             normalize_git_spec("git+ssh://git@gitlab.com/foo/bar.git"),
             "git+ssh://git@gitlab.com/foo/bar.git"
         );
-    }
-
-    // ---- spec 引号化（仅老核心 + Windows：dsh CLI 只在 win32 用 shell 拼接参数）----
-
-    #[cfg(windows)]
-    #[test]
-    fn shell_quote_quotes_spec_containing_spaces() {
-        // 安装目录含空格（如 G:\Deepseek Harness Desktop）：整条 spec 加双引号，
-        // 使 dsh CLI 的 shell:true 拼接后仍被 shell 视为单一 token（DEP0190：
-        // Node 对 shell:true 只拼接不转义）
-        assert_eq!(
-            shell_quote_spec(
-                "link:G:/Deepseek Harness Desktop/resources/internal-plugins/dsh-tauri"
-            ),
-            "\"link:G:/Deepseek Harness Desktop/resources/internal-plugins/dsh-tauri\""
-        );
-        // 制表符同样触发
-        assert_eq!(shell_quote_spec("link:C:/x\ty"), "\"link:C:/x\ty\"");
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn shell_quote_leaves_space_path_untouched_on_non_windows() {
-        // 回归（issue #104）：macOS/Linux 上 dsh CLI 直接 spawnSync（shell:false），
-        // spec 作为一个 argv 传递、空格天然保留，绝不能加引号——字面 `"` 会成为
-        // 包名的一部分，pnpm 报非法 spec → exit 1 → 内置插件每次启动重装都失败。
-        assert_eq!(
-            shell_quote_spec("link:/Applications/Deepseek Harness Desktop.app/Contents/Resources/resources/internal-plugins/dsh-tauri-ui"),
-            "link:/Applications/Deepseek Harness Desktop.app/Contents/Resources/resources/internal-plugins/dsh-tauri-ui"
-        );
-        assert_eq!(
-            shell_quote_spec("link:/Users/me/my plugins/dsh-tauri"),
-            "link:/Users/me/my plugins/dsh-tauri"
-        );
-    }
-
-    #[test]
-    fn shell_quote_leaves_space_free_spec_untouched() {
-        // 普通 npm 包名 / git HTTPS spec 无空格：原样透传，不引入多余引号
-        assert_eq!(shell_quote_spec("dshmarket"), "dshmarket");
-        assert_eq!(
-            shell_quote_spec("git+https://github.com/omdsh-dev/DSH-better-sidebar.git#next"),
-            "git+https://github.com/omdsh-dev/DSH-better-sidebar.git#next"
-        );
-        // 无空格的内置插件路径同样不被改动（保持与 internal.rs expected 一致）
-        assert_eq!(
-            shell_quote_spec("link:C:/Apps/dsh/resources/internal-plugins/dsh-tauri"),
-            "link:C:/Apps/dsh/resources/internal-plugins/dsh-tauri"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn shell_quote_preserves_link_prefix_semantics() {
-        // 引号只包 path 部分也不影响 pnpm 解析（落盘值仍为不带引号的 link: 规范形）
-        let quoted = shell_quote_spec(
-            "link:G:/Deepseek Harness Desktop/resources/internal-plugins/dsh-tauri",
-        );
-        assert!(quoted.starts_with('"'));
-        assert!(quoted.ends_with('"'));
-        assert!(quoted.contains("Deepseek Harness Desktop"));
-    }
-
-    // ---- 引号化随核心版本（issue #647：0.1.6-alpha.2 起 pnpm 由 argv 数组启动）----
-
-    #[test]
-    fn shell_join_gate_boundary_versions() {
-        // 0.1.6-alpha.1 仍是 spawnSync + shell:true（首个 argv 数组版是 alpha.2）
-        assert!(joins_pnpm_args_in_shell(Some("0.1.5-rc.2")));
-        assert!(joins_pnpm_args_in_shell(Some("0.1.6-alpha.1")));
-        assert!(!joins_pnpm_args_in_shell(Some("0.1.6-alpha.2")));
-        assert!(!joins_pnpm_args_in_shell(Some("0.1.6")));
-        assert!(!joins_pnpm_args_in_shell(Some("0.1.7")));
-        assert!(!joins_pnpm_args_in_shell(Some("1.0.0")));
-        // 版本未知 / 非法：按新核心处理（预加引号对新核心必然失败）
-        assert!(!joins_pnpm_args_in_shell(None));
-        assert!(!joins_pnpm_args_in_shell(Some("")));
-        assert!(!joins_pnpm_args_in_shell(Some("not-a-version")));
     }
 
     // ---- 本地目录 spec（issue 需求的本地安装链路）----
@@ -818,42 +706,5 @@ mod tests {
         assert_eq!(forward_slashes(Path::new("D:\\a\\b\\")), "D:/a/b");
         assert_eq!(forward_slashes(Path::new("D:/a/b/")), "D:/a/b");
         assert_eq!(forward_slashes(Path::new("D:\\a")), "D:/a");
-    }
-
-    #[test]
-    fn spec_argument_keeps_space_spec_bare_for_argv_cores() {
-        // issue #647：0.1.6-alpha.2 起 spec 作为单个 argv 直达 pnpm，Windows 上的
-        // cmd 转义由 CLI 自己完成，预加引号会让 pnpm 收到带字面引号的 spec
-        let spec = "link:D:/Deepseek Harness Desktop/resources/node_modules/dsh-tauri";
-        assert_eq!(spec_argument(spec, Some("0.1.6-alpha.2")), spec);
-        assert_eq!(spec_argument(spec, None), spec);
-        assert_eq!(spec_argument(spec, Some("not-a-version")), spec);
-        // 无空格 spec 与版本无关，始终原样透传
-        assert_eq!(spec_argument("dshmarket", Some("0.1.5-rc.2")), "dshmarket");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn spec_argument_quotes_space_spec_for_shell_joining_cores() {
-        // 回归：老核心把参数拼进 cmd，含空格的安装路径必须预加引号才不被切碎
-        let spec = "link:G:/Deepseek Harness Desktop/resources/internal-plugins/dsh-tauri";
-        assert_eq!(
-            spec_argument(spec, Some("0.1.5-rc.2")),
-            format!("\"{spec}\"")
-        );
-        assert_eq!(
-            spec_argument(spec, Some("0.1.6-alpha.1")),
-            format!("\"{spec}\"")
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn spec_argument_never_quotes_on_non_windows() {
-        // issue #104：macOS/Linux 上 dsh 直接 spawnSync（shell:false），spec 作为
-        // 单个 argv 传递、空格天然保留，老核心也不得加引号
-        let spec = "link:/Users/me/my plugins/dsh-tauri";
-        assert_eq!(spec_argument(spec, Some("0.1.5-rc.2")), spec);
-        assert_eq!(spec_argument(spec, Some("0.1.6-alpha.2")), spec);
     }
 }

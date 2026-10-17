@@ -5,9 +5,9 @@
 
 use crate::service::cli;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
 #[cfg(unix)]
 use tauri::Manager;
+use tauri::{AppHandle, Runtime};
 
 /// 解析出的本地核心信息
 pub(super) struct LocalCore {
@@ -24,7 +24,7 @@ pub(super) struct LocalCore {
 /// 与 pnpm shim 的"用户优先"策略一致，只排除我们自己生成的 shim，而非整个 bin
 /// 目录——用户可能恰好把 npm/pnpm 全局 dsh 装进 `~/.local/bin`（Unix XDG 约定，
 /// 与本应用 shim 目录相同），若整目录跳过会误判为"无本地 dsh"（issue #54）。
-pub(super) fn find_user_dsh_bin(app_handle: &AppHandle) -> Option<PathBuf> {
+pub(super) fn find_user_dsh_bin<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
     let candidates: &[&str] = if cfg!(windows) {
         &["dsh.cmd", "dsh.exe", "dsh.bat"]
     } else {
@@ -283,7 +283,7 @@ fn prefix_candidates(bin: &Path) -> Vec<PathBuf> {
 /// 2. npm 标准全局布局 `<prefix>/lib/node_modules/@deepseek-ai/dsh`
 ///    （bin 位于 `<prefix>/bin`，包目录位于 `<prefix>/lib`）；
 /// 3. pnpm 全局布局 `<prefix>/global/<n>/node_modules/@deepseek-ai/dsh`。
-fn user_dsh_package_dir(app_handle: &AppHandle) -> Option<PathBuf> {
+fn user_dsh_package_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
     let bin = find_user_dsh_bin(app_handle)?;
     package_dir_from_bin(&bin)
 }
@@ -324,7 +324,7 @@ fn read_package_version(dir: &Path) -> Option<String> {
 }
 
 /// 本地核心：包目录 + 版本 + bin.js 入口。任一环节缺失视为不存在。
-pub(super) fn local_core(app_handle: &AppHandle) -> Option<LocalCore> {
+pub(super) fn local_core<R: Runtime>(app_handle: &AppHandle<R>) -> Option<LocalCore> {
     let package_dir = user_dsh_package_dir(app_handle)?;
     let version = read_package_version(&package_dir)?;
     let bin = package_dir.join("lib").join("bin.js");
@@ -344,7 +344,7 @@ pub fn local_core_package_dir(app_handle: &AppHandle) -> Option<PathBuf> {
 }
 
 /// 本地核心是否由 pnpm 全局布局管理（决定更新走 pnpm 还是 npm）。
-fn local_core_uses_pnpm(app_handle: &AppHandle) -> bool {
+fn local_core_uses_pnpm<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
     let Some(bin) = find_user_dsh_bin(app_handle) else {
         return false;
     };
@@ -369,11 +369,37 @@ fn local_core_uses_pnpm(app_handle: &AppHandle) -> bool {
 /// 通过用户包管理器 CLI 更新本地核心（npm `update -g` / pnpm `add -g`）。
 ///
 /// 返回更新后的版本号。失败返回错误（附进程输出尾部，便于排查）。
-pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> {
+pub async fn update_local_core<R: Runtime>(app_handle: AppHandle<R>) -> Result<String, String> {
+    let _transition_guard = crate::service::workflow::acquire_core_transition().await?;
     crate::service::workflow::instances::require_exclusive_profile()?;
     let Some(core) = local_core(&app_handle) else {
         return Err("CORE_LOCAL_NOT_FOUND: no local core to update".to_string());
     };
+    if super::source::active_source(&app_handle) != super::source::CoreSource::App {
+        return Err(
+            "CORE_LOCAL_UPDATE_REQUIRES_APP: switch to a supported managed core before updating the local core"
+                .to_string(),
+        );
+    }
+    let managed_version = crate::config::get_dsh_version(&app_handle)
+        .as_deref()
+        .and_then(|version| semver::Version::parse(version).ok());
+    let minimum = crate::config::manifest::minimum_dsh_version(&app_handle)
+        .as_deref()
+        .and_then(|version| semver::Version::parse(version).ok());
+    if !crate::config::get_dsh_binary_path(&app_handle).is_file()
+        || !managed_version
+            .zip(minimum)
+            .is_some_and(|(version, minimum)| version >= minimum)
+    {
+        return Err(
+            "CORE_LOCAL_UPDATE_REQUIRES_APP: a supported managed core must be installed before updating the local core"
+                .to_string(),
+        );
+    }
+    crate::config::update_store_dat_setting(&app_handle, |setting| {
+        setting.active_core = Some(super::source::CoreSource::App.as_str().to_string());
+    });
     log::info!("Updating local dsh core at {}", core.package_dir.display());
 
     let uses_pnpm = local_core_uses_pnpm(&app_handle);
@@ -449,6 +475,10 @@ pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> 
     }
     Ok(version)
 }
+
+#[cfg(test)]
+#[path = "local_update_tests.rs"]
+mod local_update_tests;
 
 #[cfg(test)]
 mod tests {

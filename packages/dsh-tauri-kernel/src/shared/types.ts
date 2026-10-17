@@ -25,6 +25,13 @@ export interface KernelProjectionState {
   readonly binding: KernelBinding | null
 }
 
+declare module '@deepseek-ai/dsh-session/types' {
+  interface PluginRecordMap {
+    'plugin:dsh-tauri-kernel/kernel': KernelBinding
+    'plugin:dsh-tauri-kernel/model': NativeTurnOptions
+  }
+}
+
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     bridgeModel: NativeTurnOptions

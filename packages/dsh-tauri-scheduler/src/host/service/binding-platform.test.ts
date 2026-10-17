@@ -69,19 +69,21 @@ async function createHarness(dependencies: readonly string[], missing = false, w
         agentPresets: {},
         permissionPresets: {},
         llm: llmModule,
+        remoteAccess: { allows: vi.fn(() => true) },
         attachments: { imageLimits: { maxImageBytes: 1024 } },
         fileUploads: { registerAgentResolver: () => () => {} },
         fs: {},
         fileReferences: {},
-        typert: { lookups: { configure: vi.fn() }, contexts: { configureHost: vi.fn() } },
+        typert: { lookups: { configure: vi.fn() }, contexts: { configureHost: vi.fn() }, resources: { register: vi.fn(() => () => {}) } },
         connection: { fetch: { register: () => () => {} } },
       }
       for (const [name, value] of Object.entries(values))
         ctx.provide(name, value)
     },
   })
-  await root.plugin(SessionController, { nativeOpen: false })
+  await root.plugin(SessionController, { nativeOpen: false }).await()
   const controller = root.get('sessionController') as SessionController
+  expect(controller).toBeInstanceOf(SessionController)
   let pluginContext: Context | undefined
   await root.plugin({
     name: 'scheduler-binding-platform-regression',
@@ -90,7 +92,8 @@ async function createHarness(dependencies: readonly string[], missing = false, w
       pluginContext = ctx
       ctx.effect(() => server(ctx))
     },
-  })
+  }).await()
+  expect(pluginContext).toBeInstanceOf(Context)
   const httpServer = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
     const route = routes.get(pathname)

@@ -64,7 +64,6 @@ export function getSidebarStyle() {
  *
  * 入场动效按官方 `modalEnter` 的时长/缓动镜像成 `background`、`backdrop-filter` 过渡：
  * 壳层在自己的文档里，拿不到包内 CSS 的 keyframes 名，过渡是等价且不跨文档的实现
- * （进场淡入、出场瞬时，与官方一致）；无动画的代次（≤0.1.7-alpha.1）时长解析为 `0s`。
  */
 export function getOverlayMarkedStyle() {
   const overlay = overlayElement()

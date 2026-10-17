@@ -51,7 +51,7 @@ interface AgentInput {
   sessionId: string
   meta: { cwd: string, agentPreset: string }
   agentOptions: { provider?: string, model?: string }
-  setup: (agentCtx: unknown, createdAgent?: SetupAgentLike) => Promise<void>
+  setup: (agentCtx: unknown, agent: SetupAgentLike) => Promise<void>
 }
 
 interface RunControl {
@@ -384,6 +384,33 @@ describe('executor.run', () => {
     expect(host.workspace.attachSession).toHaveBeenCalledWith(control.session.id)
     expect(host.rename).toHaveBeenCalledWith(control.session, 'nightly')
     expect(control.followup.mock.calls[0]![0]).toBe(host.runtime.createUserMessage.mock.results[0]!.value)
+  })
+
+  it('rejects a missing setup Agent without reading a context Agent', async () => {
+    const host = installHost()
+    const readAgent = vi.fn(() => ({ session: { id: 'context-session' } }))
+    const agentContext = Object.defineProperty({}, 'agent', { get: readAgent })
+    host.create.mockImplementationOnce(async (input) => {
+      await Reflect.apply(input.setup, undefined, [agentContext])
+      throw new Error('setup accepted a missing Agent')
+    })
+
+    await expect(executor.run(taskFixture, 'manual')).resolves.toMatchObject({
+      ok: false,
+      error: 'scheduler setup has no scoped Agent',
+    })
+
+    expect(readAgent).not.toHaveBeenCalled()
+    expect(host.mount).not.toHaveBeenCalled()
+    expect(host.runtime.installModelSelection).not.toHaveBeenCalled()
+    expect(host.permissions.set).not.toHaveBeenCalled()
+    expect(host.runtime.setApprovalPolicy).not.toHaveBeenCalled()
+    expect(host.flush).not.toHaveBeenCalled()
+    expect(runs.save).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: 'scheduler setup has no scoped Agent',
+    }))
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('未指定资源时使用宿主默认模型、权限与 standard preset', async () => {

@@ -90,7 +90,7 @@ use diagnose::{
 use pnpm::ensure_pnpm;
 use single::single_plugin_args;
 pub(crate) use spec::local_spec_from_path;
-use spec::{bundled_dir_of, normalize_git_spec, preset_spec_for_install, spec_argument};
+use spec::{bundled_dir_of, normalize_git_spec, preset_spec_for_install};
 
 /// 允许构建重试的上限。每次重试解决 pnpm 报出的一个允许键（git depPath 或
 /// 传递构建包名），多个 git 插件 / 多个原生依赖各占一次，上限封顶防死循环。
@@ -180,15 +180,6 @@ pub async fn install_specs(app_handle: &AppHandle, specs: &[String]) -> Result<(
 /// 缺陷（pnpm issue #3948 / #7243 / #13276）：公开仓库一旦落进 git+ssh，在没有
 /// SSH 配置的桌面机上必然 `Host key verification failed` / `Permission denied
 /// (publickey)`。
-///
-/// 最后按活动核心决定是否为含空格的 spec 加内嵌双引号：0.1.6-alpha.2 起 dsh CLI
-/// 改用 execa 以 argv 数组启动 pnpm，参数不再经 shell 拼接，预加引号只会让 pnpm
-/// 收到带字面引号的 spec（issue #647）；更早的核心在 win32 用 `shell:true` 把参数
-/// 拼成命令行（Node 只拼接、不转义，DEP0190），含空格的内置插件路径
-/// （`link:<应用安装目录>`）不预加引号就会被切碎成多个 spec，pnpm 报
-/// `ERR_PNPM_SPEC_NOT_SUPPORTED`、启动自愈每轮重装（死循环）。两种形态落盘
-/// `package.json` 的值都是不带引号的 `link:<路径>`，与内核对账的 `expected`
-/// （bundled_dep_spec）一致（见 [`spec_argument`]）。
 fn preset_targets(app_handle: &AppHandle, ids: &[String]) -> Result<Vec<InstallTarget>, String> {
     if ids.is_empty() {
         return Err("PREINSTALL_EMPTY: no plugins selected".to_string());
@@ -213,7 +204,7 @@ fn preset_targets(app_handle: &AppHandle, ids: &[String]) -> Result<Vec<InstallT
         targets.push(InstallTarget {
             id: preset.id.clone(),
             name: Some(installed_name(preset).to_string()),
-            spec: spec_argument(&raw, core_version.as_deref()),
+            spec: raw,
         });
     }
     Ok(targets)
@@ -260,7 +251,7 @@ fn spec_targets(app_handle: &AppHandle, specs: &[String]) -> Result<Vec<InstallT
                 targets.push(InstallTarget {
                     id: preset.id.clone(),
                     name: Some(installed_name(preset).to_string()),
-                    spec: spec_argument(&normalize_git_spec(&raw), core_version.as_deref()),
+                    spec: normalize_git_spec(&raw),
                 });
                 continue;
             }
@@ -270,7 +261,7 @@ fn spec_targets(app_handle: &AppHandle, specs: &[String]) -> Result<Vec<InstallT
         targets.push(InstallTarget {
             id: name.clone().unwrap_or_else(|| raw.clone()),
             name,
-            spec: spec_argument(&raw, core_version.as_deref()),
+            spec: raw,
         });
     }
     Ok(targets)

@@ -32,7 +32,6 @@ use crate::utils::{patch_core_file, patch_dsh, PatchOutcome};
 /// 幂等/自识别标记：出现在新增守卫行的末尾。
 const PATCH_MARKER: &str = "dsh-tauri: keep the model menu mounted through a WebKit blur";
 
-/// `onBlur` 里「焦点仍在自身或菜单内则放行」的那条判定（锚点绑定 0.1.6-alpha.2 压缩后源码）。
 const ONBLUR_ANCHOR: &str = "\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;";
 
 /// 补丁后：先放行 `relatedTarget` 缺失的 blur（WebKit 点按钮不给焦点），再保留原判定。
@@ -66,9 +65,8 @@ pub fn apply(app_handle: &tauri::AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// 0.1.6-alpha.2 产物的真实片段（`onBlur` 三行，含上游缩进）。
     fn fixture() -> String {
-        format!("\t\t\tconst onBlur = (event) => {{\n{ONBLUR_ANCHOR}\n\t\t\t\tclose();\n\t\t\t}};\n")
+        "\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n".into()
     }
 
     #[test]

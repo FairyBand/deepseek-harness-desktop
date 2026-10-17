@@ -151,10 +151,10 @@ export async function openTaskTab({ controller, adapter, layout, sidebar, target
       unhookDisposal = controller.add(() => fail(undefined))
       cancelDeadline = controller.timeout(() => fail(undefined), 5_000)
       unsubscribe = sidebar.mounted.subscribe(attempt)
-      unsubscribePanel = layout.panelInfo.subscribe(() => {
+      unsubscribePanel = layout.panelInfo?.subscribe(() => {
         if (layout.panelInfo.getSnapshot().activePanelId !== null)
           fail(undefined)
-      })
+      }) ?? (() => {})
       if (settled) {
         unsubscribe()
         unsubscribePanel()

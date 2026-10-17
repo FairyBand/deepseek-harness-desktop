@@ -52,22 +52,16 @@ function sessionOf(sessionId: string): any {
   try {
     const ctx = getServerContext<HostContext>(server)
     return ctx.sessions?.get?.(sessionId)
-      ?? ctx.sessions?.list?.().find((session: any) => session?.id === sessionId)
   }
   catch {
     return undefined
   }
 }
 
-/** 会话 cwd（header.cwd 优先，兼容 session.cwd）；缺失返回 null，不猜测进程工作目录。 */
 function cwdOf(sessionId: string): string | null {
   const session = sessionOf(sessionId)
-  const cwd = typeof session?.header?.cwd === 'string'
-    ? session.header.cwd
-    : typeof session?.cwd === 'string'
-      ? session.cwd
-      : ''
-  return cwd.length > 0 ? cwd : null
+  const cwd = session?.header?.cwd
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : null
 }
 
 function remember(key: string, result: WorkspaceProbe): void {

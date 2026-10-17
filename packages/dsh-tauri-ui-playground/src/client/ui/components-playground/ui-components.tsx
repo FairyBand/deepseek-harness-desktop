@@ -78,7 +78,7 @@ function SourceCard({ entry }: { entry: UiComponentEntry }): ReactElement {
             : `映射组件：${source.component} · ${source.variant}`}
         </span>
         <span className="dshp-ui-components__code">{source.package}</span>
-        <span>{`版本：${source.availableAt.join(' / ')}`}</span>
+        <span>{`来源采样 / Source samples：${source.availableAt.join(' / ')}`}</span>
         {source.mappedClass === undefined
           ? null
           : <span>{`官方类名：.${source.mappedClass}`}</span>}

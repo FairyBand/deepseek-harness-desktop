@@ -3,10 +3,12 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the official workspace browser and settings sidebar are extended through official slots, official primitives `Menu` entries and the official sessions / workspaces service surfaces.
 
@@ -21,7 +23,7 @@ Deliberate difference:
 
 - The official entry only unarchives; this package's "Archived chats" page adds search, sort, grouping, project filter, delete, and a "delete workspace" action rewritten into "archive workspace".
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The sessions and workspaces integration still delegates to official services. Optional draft initialization on `uiWorkspace.startSession` does not replace the adapter open path.
 - The official workspace menu and row shapes used by the archive-entry patch remain compatible; no removed invariant export is imported.

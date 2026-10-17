@@ -3,9 +3,11 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
 - License: MIT — Copyright (c) 2026 DeepSeek
 
 Derived (upstream `packages/client/ui-settings-models/` → this package `src/`):
@@ -49,7 +51,7 @@ Re-implemented instead of copied:
 - Styling runs on this repo's `css-render` stack (`client/models/styles.ts`, `client/models/styles.overrides.ts`); upstream `.module.css` files are not copied.
 - `client/register/styles.ts`, `client/models/remote.ts`, `client/models/settings-forms.ts`, `client/types/remotes.ts`, `client/constants/index.ts` are this repo's own glue.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The derived `packages/client/ui-settings-models/src/` tree is byte-for-byte unchanged across this corridor, including onboarding, credential events, provider forms, model compatibility fields, and slots.
 - The new Cordis release needs its matching Include, Loader, and Group peers. They are pinned in the workspace so the fork shares the same augmented `Context` as the official client packages.

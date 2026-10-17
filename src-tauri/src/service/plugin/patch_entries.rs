@@ -15,12 +15,6 @@
 //! 条目一定会被 import。顶层带 `id` 的 insert 只在目标 group 存在时才生效
 //! （上游 `applyEntryPatches` 找不到目标只 warn 后跳过），是否需要该 group 取决于
 //! 组合后的树，桌面端不做猜测——这类只记 debug 日志，绝不阻断启动。
-//!
-//! 解析规则与 loader 一致：条目 `name` 是裸包名时按 Node 的 `node_modules` 查找
-//! 顺序从档案目录逐级向上解析；`dsh` 安装树自身的依赖由 dsh 启动时的
-//! `$DSH_HOME/profiles/node_modules` 回退镜像提供，同样算可解析（宁可漏报，绝不
-//! 因为猜错而拦下一个本来能起来的启动）。路径 / `file:` URL 形式的 `name` 由
-//! 上游改写，不做判定。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,9 +27,6 @@ use super::patch_guard::{backup_path, now_stamp, patch_layer_paths};
 
 /// 启动失败错误串的前缀；前端据此识别并渲染「移除悬空条目」入口。
 pub(crate) const PATCH_ENTRY_UNRESOLVED: &str = "PATCH_LAYER_ENTRY_UNRESOLVED";
-
-/// 档案本地模块回退目录（与 dsh-app-boot 的 `PROFILE_MODULE_FALLBACK_DIR` 同名）。
-const PROFILE_MODULE_FALLBACK_DIR: &str = ".dsh-module-fallback";
 
 /// 补丁层里一个解析不到对应包的 `insert` 条目。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -299,21 +290,9 @@ fn is_bare_package_name(name: &str) -> bool {
     }
 }
 
-/// 包是否能被 loader 解析：档案目录的 Node 查找顺序、档案本地回退目录、
-/// dsh 安装树（安装依赖由 dsh 启动时的 `profiles/node_modules` 回退镜像提供）。
 fn package_resolvable(profile_dir: &Path, install_anchor: Option<&Path>, name: &str) -> bool {
-    if resolvable_from(profile_dir, name) {
-        return true;
-    }
-    if install_anchor.is_some_and(|anchor| resolvable_from(anchor, name)) {
-        return true;
-    }
-    profile_dir
-        .join(PROFILE_MODULE_FALLBACK_DIR)
-        .join("node_modules")
-        .join(name)
-        .join("package.json")
-        .is_file()
+    resolvable_from(profile_dir, name)
+        || install_anchor.is_some_and(|anchor| resolvable_from(anchor, name))
 }
 
 /// 按 Node 的 `node_modules` 查找顺序（逐级向上的父目录）判定包是否存在。
@@ -503,6 +482,43 @@ mod tests {
     }
 
     #[test]
+    fn retired_profile_projection_does_not_resolve_dangling_insert() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("profiles/web");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let retired = profile.join(".dsh-module-fallback");
+        install_package(&retired, "dsh-file-edit");
+        std::fs::write(profile.join("cordis.patch.yml"), DANGLING_LAYER).unwrap();
+
+        let entries = scan_unresolved_entries_in(&profile, &home, None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "dsh-file-edit");
+        assert_eq!(entries[0].line, 3);
+        assert!(!entries[0].declared);
+
+        let report = strip_unresolved_entries_in(&profile, &home, None).unwrap();
+        assert_eq!(report.layers.len(), 1);
+        assert_eq!(report.layers[0].removed, 1);
+        assert_eq!(
+            std::fs::read_to_string(&report.layers[0].backup).unwrap(),
+            "- insert:\n    - id: file-edit\n      name: dsh-file-edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.join("cordis.patch.yml"))
+                .unwrap()
+                .trim(),
+            "[]"
+        );
+        assert_eq!(
+            std::fs::read_to_string(retired.join("node_modules/dsh-file-edit/package.json"))
+                .unwrap(),
+            "{}\n"
+        );
+    }
+
+    #[test]
     fn installed_package_is_not_reported() {
         let profile = tmp_dir("installed-profile");
         let home = tmp_dir("installed-home");
@@ -514,8 +530,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// 父目录里的 `node_modules` 同样算可解析（`$DSH_HOME/profiles/node_modules`
-    /// 回退镜像就是这一层），否则会把核心包误判成悬空。
     #[test]
     fn ancestor_node_modules_counts_as_resolvable() {
         let root = tmp_dir("ancestor-root");
@@ -601,7 +615,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// 安装树自带的包（由 dsh 的 `profiles/node_modules` 回退镜像提供）不阻断启动。
     #[test]
     fn installation_anchor_makes_a_package_resolvable() {
         let install = tmp_dir("install-anchor");

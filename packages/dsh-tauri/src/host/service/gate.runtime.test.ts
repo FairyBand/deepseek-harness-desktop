@@ -46,7 +46,7 @@ it('real core /api prefix admits its original peer only while the embedded gate 
   await connectionModule.apply(context)
   await vi.waitFor(() => expect(routes.map(route => route.path)).toContain('/api'))
   const connection = context.connection as HostConnectionService & {
-    browserPeer?: { id: string, signal: AbortSignal, dispose: () => Promise<void> }
+    operator?: Pick<HostConnectionService['browserPeer'], 'id' | 'signal' | 'dispose'>
     admitConnection?: (request: IncomingMessage) => { rejection: number } | { peer: unknown, release: () => Promise<void> }
   }
   const peer = connection.browserPeer ?? connection.operator

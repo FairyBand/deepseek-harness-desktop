@@ -3,9 +3,11 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
 - License: MIT — Copyright (c) 2026 DeepSeek
 
 Derived (upstream → this package):
@@ -24,7 +26,7 @@ Note:
 
 - The account-stream carrier gate and the sidebar/DOM contracts mirrored here survived `0.2.0-rc.1` → `0.2.0-rc.2` unchanged; `dshDesktop` still reports `protocolVersion: 1` with the optional `deviceInfo` member, and `DESKTOP_HOST_PROTOCOL_VERSION` stays `4`.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The account watch, carrier marker, index injection union, and connection authentication gates remain unchanged from `0.2.0-rc.2` to `0.2.1-alpha.1`.
 - The target still uses desktop product protocol `1` and desktop host protocol `4`; no Electron product API is added to the Tauri marker.

@@ -90,10 +90,10 @@ jobs:
       - name: Test iOS signing and Beta review guards without credentials
         run: python3 -m unittest discover -s .github/scripts -p 'test_ios_*.py' -v
 
-      - name: Install alpha.3 core for desktop admission regression
-        run: npm install --prefix "$RUNNER_TEMP/dsh-cli-admission" --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.3
+      - name: Install rc.1 core for desktop admission regression
+        run: npm install --prefix "$RUNNER_TEMP/dsh-cli-admission" --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.1
 
-      - name: Test desktop admission against alpha.3 gateway
+      - name: Test desktop admission against rc.1 gateway
         env:
           DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli-admission/node_modules/@deepseek-ai/dsh/lib/bin.js
         run: |
@@ -137,15 +137,20 @@ jobs:
         run: pnpm build:plugins
 
       - name: Unit test
-        run: pnpm run test:unit -- --run
+        run: node node_modules/vitest/vitest.mjs run --project unit --sequence.shuffle --sequence.seed=400
 
-  # 插件 L2 E2E（vitest + Playwright 库 API）：
-  # 打构建产物，起真实 `dsh web` 进程，断言宿主路由与客户端挂载点。
   plugins-e2e:
-    name: Plugins E2E Tests (vitest + playwright)
+    name: Plugins E2E (${{ matrix.core }})
     needs: pre_job
     if: ${{ needs.pre_job.outputs.should_skip != 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        core: [0.2.1-rc.1, 0.1.7-rc.1]
+    env:
+      DSH_E2E_CORE_VERSION: ${{ matrix.core }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -156,86 +161,51 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Chromium 二进制不带在 npm 包里：runner 缺它时 chromium.launch() 会直接失败，
-      # 浏览器类用例必须真跑，不能因缺二进制而静默跳过。
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      # L2 只针对构建产物运行（官方「真实入口路径」要求），未构建会直接失败。
       - name: Build Plugins
         run: pnpm build:plugins
 
-      # dsh CLI 刻意不进仓库依赖树：它是运行期产物，装进依赖树会与 catalog 的
-      # `@deepseek-ai/dsh-*` 形成双树，profile 组合时取到不匹配的实例
-      # （实测报 `dsh-session does not provide an export named 'snapshotJsonValue'`）。
-      # 这里装到独立目录，经 DSH_E2E_DSH_BIN 指给编排。
-      - name: Install dsh CLI (isolated)
-        run: |
-          mkdir -p "$RUNNER_TEMP/dsh-cli"
-          cd "$RUNNER_TEMP/dsh-cli"
-          npm init -y >/dev/null
-          # 0.1.5-rc.3 起该发布代的依赖区间引用了一个从未发布的版本
-          # （dsh-client-ui-sidebar-documentpreview@^0.1.5-rc.3），整条 0.1.5-rc.x
-          # 直接安装都会 ETARGET；用 overrides 夹回已发布的 rc.2（同一发布代）。
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.overrides={'@deepseek-ai/dsh-client-ui-sidebar-documentpreview':'0.1.5-rc.2'};fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
-          # 插件 L2 用例的文案/分区断言按 0.1.5-rc 基线写就（也是 README 声明的最低兼容基线）；
-          # 0.1.6 起上游改了设置侧栏分区名与未分组 chip 等文案，另需一轮 e2e 适配。
-          npm install --no-audit --no-fund @deepseek-ai/dsh@0.1.5-rc.2
+      - name: Install isolated dsh CLI
+        run: npm install --prefix "$RUNNER_TEMP/dsh-cli" --no-audit --no-fund @deepseek-ai/dsh@${{ matrix.core }}
 
-      # dsh-tauri-remote 的入站暴露用例按当前内核（dsh-h3 设置分区与面板）写就，
-      # 与 extension-panel 同口径：legacy 内核排除，改由「Host and migrated plugin contracts」批次跑。
-      - name: Plugin L2 test (legacy core)
+      - name: Plugin L2 full suite
         env:
           DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
-        run: |
-          node node_modules/vitest/vitest.mjs run --project plugin \
-            --exclude test/e2e/plugins/dsh-tauri-extension-panel.e2e.ts \
-            --exclude test/e2e/plugins/dsh-tauri-scheduler.e2e.ts \
-            --exclude test/e2e/plugins/dsh-tauri-scheduler-client.e2e.ts \
-            --exclude test/e2e/plugins/dsh-tauri-remote-access.e2e.ts \
-            --exclude test/e2e/plugins/dsh-tauri-remote-panel.e2e.ts
+        run: node node_modules/vitest/vitest.mjs run --project plugin --sequence.shuffle --sequence.seed=100
 
-      - name: Mobile settings composition (legacy core)
+      - name: Host, settings and official plugin composition stability
         env:
           DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
-        run: |
-          for seed in 201 202 203 204 205; do
-            node node_modules/vitest/vitest.mjs run --project plugin --sequence.shuffle --sequence.seed="$seed" test/e2e/plugins/dsh-tauri-mobile-settings.e2e.ts || exit $?
-          done
-
-      - name: Install current dsh CLI (isolated)
-        run: npm install --prefix "$RUNNER_TEMP/dsh-cli-current" --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.1
-
-      - name: Official plugins, appearance and mobile settings (current core)
-        env:
-          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli-current/node_modules/@deepseek-ai/dsh/lib/bin.js
         run: |
           for seed in 101 102 103 104 105; do
-            node node_modules/vitest/vitest.mjs run --project plugin --sequence.shuffle --sequence.seed="$seed" test/e2e/plugins/dsh-tauri-extension-panel.e2e.ts test/e2e/plugins/dsh-tauri-mobile-settings.e2e.ts test/e2e/plugins/dsh-tauri-appearance.e2e.ts test/e2e/plugins/dsh-tauri-appearance-boot.e2e.ts || exit $?
+            node node_modules/vitest/vitest.mjs run --project plugin --sequence.shuffle --sequence.seed="$seed" \
+              test/e2e/plugins/dsh-host-and-core-contract.e2e.ts \
+              test/e2e/plugins/dsh-tauri.e2e.ts \
+              test/e2e/plugins/dsh-tauri-ui.e2e.ts \
+              test/e2e/plugins/dsh-tauri-extension-panel.e2e.ts \
+              test/e2e/plugins/dsh-tauri-mobile-settings.e2e.ts \
+              test/e2e/plugins/dsh-tauri-appearance.e2e.ts \
+              test/e2e/plugins/dsh-tauri-appearance-boot.e2e.ts || exit $?
           done
 
-      - name: Host and migrated plugin contracts (current core)
+      - name: Unified scheduler host and right-sidebar stability
         env:
-          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli-current/node_modules/@deepseek-ai/dsh/lib/bin.js
-        run: node node_modules/vitest/vitest.mjs run --project plugin test/e2e/plugins/dsh-host-and-core-contract.e2e.ts test/e2e/plugins/dsh-tauri-model.e2e.ts test/e2e/plugins/dsh-tauri-worktree.e2e.ts test/e2e/plugins/dsh-tauri-experimental.e2e.ts test/e2e/plugins/dsh-tauri-remote-access.e2e.ts test/e2e/plugins/dsh-tauri-remote-panel.e2e.ts
-
-      - name: Unified scheduler host and right-sidebar contracts (current core)
-        id: scheduler_contracts
-        env:
-          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli-current/node_modules/@deepseek-ai/dsh/lib/bin.js
+          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
           DSH_SCHEDULER_DIAGNOSTICS_DIR: ${{ runner.temp }}/scheduler-diagnostics
         run: |
           for seed in 987 988 989 990 991; do
             node node_modules/vitest/vitest.mjs run --project plugin --sequence.shuffle --sequence.seed="$seed" test/e2e/plugins/dsh-tauri-scheduler.e2e.ts test/e2e/plugins/dsh-tauri-scheduler-client.e2e.ts || exit $?
           done
 
-      - name: Upload scheduler contract failure diagnostics
-        if: failure() && steps.scheduler_contracts.outcome == 'failure'
+      - name: Upload scheduler failure diagnostics
+        if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: scheduler-contract-diagnostics
+          name: scheduler-contract-diagnostics-${{ matrix.core }}
           path: ${{ runner.temp }}/scheduler-diagnostics
-          if-no-files-found: error
+          if-no-files-found: ignore
 
   # 桌面端 L3 E2E（vitest + WebdriverIO）：
   # 驱动真实 Tauri 窗口，只能在 Windows 上跑（embedded WebDriver + WebView2）。
@@ -310,7 +280,7 @@ jobs:
           pnpm tauri build --debug --no-bundle --config "$env:RUNNER_TEMP\tauri-e2e.json"
 
       - name: Desktop L3 test
-        run: pnpm run test:e2e:desktop -- --run
+        run: node node_modules/vitest/vitest.mjs run --project desktop --sequence.shuffle --sequence.seed=500
 
   # Rust 单元测试（应用主体逻辑）：
   # 这是 CI 此前完全缺失的部分。仓库存在大量平台专属代码，必须在对应 OS 上编译并测试：

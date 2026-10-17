@@ -3,9 +3,11 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the plugin mounts an official provider and consumes official client contracts.
 
@@ -42,7 +44,7 @@ Integration points:
 - `source/dsh-pet`: reference copy at `4c097297ca773abb173198b1384b3a11dcf89409`, not the source of the play-time assets above.
 - `QCYTSN/dsh-dafeiyu`: referenced for text and status-priority behaviour only; no sprite or `legacy/` assets are bundled, downloaded or redistributed (see [`docs/sync-log.md`](./docs/sync-log.md)). Its own art was replaced upstream in `v0.1.10` by assets imported from `PC2005-cloud/dsh-pet`.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The skill provider, account-menu geometry, workspace list, and official primitives entry points remain compatible. The StateDot animation restart fix arrives through the official re-export.
 - Asset pins and third-party pet implementations are independent of this Harness compatibility baseline and are not advanced.

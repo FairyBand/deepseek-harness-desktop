@@ -1,27 +1,15 @@
-import type { ClientContext, PanelHandle, SlotRegistry } from 'dsh-tauri/client'
+import type { ClientContext, LocaleService, PanelHandle, SlotRegistry } from 'dsh-tauri/client'
 import type { ReactElement } from 'react'
-import { cssr, Icon, IconSparkleRegular, mountStyle, Panel, Puzzle, SlotOutlet } from 'dsh-tauri-ui/client'
+import { Icon, IconSparkleRegular, mountStyle, Panel, Puzzle, SlotOutlet } from 'dsh-tauri-ui/client'
 import { definePanel, defineRegister, hidePanel } from 'dsh-tauri/client'
 import { useSyncExternalStore } from 'react'
 import { ExtensionPanel } from '../components/extension-panel'
-import { MARKET_SERVICE_NAME, PANEL_ACTION_ORDER, PANEL_ID } from '../constants'
+import { MARKET_SERVICE_NAME, PANEL_ACTION_ORDER, PANEL_ID, PLUGINS_MORE_HEADER_SELECTOR } from '../constants'
 import { locale } from '../locales'
 import { currentScope, hostsMarketPanel, readMarket } from '../service/market'
 import { store } from '../store'
+import { pluginsStyle } from '../styles/plugins.cssr'
 import { chooseWorkspace, sessionSnapshotOf, workspaceSnapshotOf } from './extension-panel.utils'
-
-const pluginsStyle = cssr.c([
-  cssr.c('[data-dsh-extension-plugins]', { position: 'relative' }),
-  cssr.c('[data-dsh-extension-plugins] > [data-dsh-plugins-icon]', { display: 'none', position: 'absolute', top: '5px', left: 0, width: '22px', height: '22px', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }),
-  cssr.c('[data-dsh-extension-plugins]:has([data-plugin-panel] > header[data-window-drag]) > [data-dsh-plugins-icon]', { display: 'inline-flex' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel]', { height: 'auto', padding: 0, overflow: 'visible', gap: '14px' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] > header[data-window-drag]', { paddingTop: 0, flexWrap: 'wrap', alignItems: 'center', gap: '14px 10px' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] > header > div:first-child', { display: 'contents' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] > header h1', { margin: 0, paddingLeft: '32px', fontSize: '16px', lineHeight: '24px', fontWeight: 500 }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] > header > div:first-child > div', { order: 2, width: '100%', margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] > header > div:last-child', { marginLeft: 'auto' }),
-  cssr.c('[data-dsh-extension-plugins] [data-plugin-panel] div[data-window-drag]', { paddingTop: '12px' }),
-])
 
 export const extensionPanelFeature = defineRegister<ClientContext>((controller, ctx, adapter) => {
   let panel: PanelHandle | undefined
@@ -52,7 +40,52 @@ export const extensionPanelFeature = defineRegister<ClientContext>((controller, 
     }
   }
 
+  const backButtons = new Map<HTMLButtonElement, { label: HTMLSpanElement, original: string | null, applied: string }>()
+  function syncBackButtons(buttons: Iterable<HTMLButtonElement>): void {
+    const current = new Set(buttons)
+    for (const [button, entry] of backButtons) {
+      if (current.has(button))
+        continue
+      entry.label.remove()
+      button.removeAttribute('data-dsh-plugins-back')
+      if (button.getAttribute('aria-label') === entry.applied) {
+        if (entry.original === null)
+          button.removeAttribute('aria-label')
+        else
+          button.setAttribute('aria-label', entry.original)
+      }
+      backButtons.delete(button)
+    }
+    const text = locale.text('pluginsBack')
+    for (const button of current) {
+      let entry = backButtons.get(button)
+      if (entry === undefined) {
+        const label = document.createElement('span')
+        entry = { label, original: button.getAttribute('aria-label'), applied: text }
+        backButtons.set(button, entry)
+      }
+      else if (button.getAttribute('aria-label') !== entry.applied) {
+        entry.original = button.getAttribute('aria-label')
+      }
+      if (entry.label.textContent !== text)
+        entry.label.textContent = text
+      if (entry.label.parentElement !== button)
+        button.append(entry.label)
+      if (!button.hasAttribute('data-dsh-plugins-back'))
+        button.setAttribute('data-dsh-plugins-back', '')
+      entry.applied = text
+      if (button.getAttribute('aria-label') !== text)
+        button.setAttribute('aria-label', text)
+    }
+  }
+  const syncBack = (): void => syncBackButtons(document.querySelectorAll<HTMLButtonElement>(`${PLUGINS_MORE_HEADER_SELECTOR} > button:first-child`))
   controller.add(mountStyle(pluginsStyle, `${PANEL_ID}-plugins`, PANEL_ID))
+  controller.observe(document.body, syncBack, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label'] })
+  const localeService = adapter.service<LocaleService>('locale')
+  if (typeof localeService?.subscribe === 'function')
+    controller.add(localeService.subscribe(syncBack))
+  controller.add(() => syncBackButtons([]))
+  syncBack()
   if (typeof slots?.subscribe === 'function')
     controller.add(subscribePlugins(syncPlugins))
   syncPlugins()

@@ -269,10 +269,10 @@ describe('remote plugin', () => {
   it('forwards installs to the manager', async () => {
     const { service } = await boot()
     const install = vi.spyOn(service, 'install')
-      .mockResolvedValue({ installed: ['node'], dshRef: 'dsh-0.1.2-rc.1-1', dshVersion: '0.1.2-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true })
+      .mockResolvedValue({ installed: ['node'], dshRef: 'dsh-0.2.1-rc.1-39009013600', dshVersion: '0.2.1-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true })
     const result = await service.install(MachineId('a'), undefined)
     expect(install).toHaveBeenCalledWith(MachineId('a'), undefined)
-    expect(result).toEqual({ installed: ['node'], dshRef: 'dsh-0.1.2-rc.1-1', dshVersion: '0.1.2-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true })
+    expect(result).toEqual({ installed: ['node'], dshRef: 'dsh-0.2.1-rc.1-39009013600', dshVersion: '0.2.1-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true })
   })
 
   it('saves a machine into the state document and refreshes the manager', async () => {

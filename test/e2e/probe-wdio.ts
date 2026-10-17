@@ -9,17 +9,21 @@
 import type { ChildProcess } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, statSync } from 'node:fs'
 import { createConnection } from 'node:net'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { assertDesktopArtifactsCurrent } from './support/artifacts'
+import { isolatedDshEnv } from './support/dsh'
 
 // 常量配置
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const APP_PATH = path.join(ROOT, 'src-tauri', 'target', 'debug', 'deepseek-harness-desktop.exe')
-const LOG_PATH = path.join(ROOT, '.temp-wdio-probe-app.log')
+const SCRATCH = mkdtempSync(path.join(tmpdir(), 'dsh-e2e-desktop-probe-'))
+const LOG_PATH = path.join(SCRATCH, 'probe.log')
 
 const APP_PORT = 3081
 const WD_PORT = 4445
@@ -190,9 +194,9 @@ async function stopApp(child: ChildProcess): Promise<void> {
  */
 async function main() {
   // 1. 环境与前置预检
-  if (!existsSync(APP_PATH)) {
-    fail(`二进制不存在：${APP_PATH}\n先运行：cargo build --manifest-path src-tauri/Cargo.toml`)
-  }
+  if (process.platform !== 'win32')
+    fail('原生 WebDriver 探针仅支持 Windows，不能降级到普通浏览器。')
+  assertDesktopArtifactsCurrent(ROOT, APP_PATH)
   if (await isPortBusy(APP_PORT)) {
     fail(`${APP_PORT} 已被监听（debug 固定端口）。请先停掉 dev/debug 实例；探针不自动杀进程。`)
   }
@@ -204,7 +208,13 @@ async function main() {
   const fd = openSync(LOG_PATH, 'w')
   const child = spawn(APP_PATH, [], {
     cwd: ROOT,
-    env: { ...process.env, TAURI_WEBDRIVER_PORT: String(WD_PORT) },
+    env: {
+      ...isolatedDshEnv(SCRATCH),
+      DSH_E2E_HOME: SCRATCH,
+      DSH_E2E_WEBVIEW_DATA_DIR: path.join(SCRATCH, 'webview2'),
+      DSH_DOWNLOAD_CACHE_DIR: path.join(SCRATCH, 'download-cache'),
+      TAURI_WEBDRIVER_PORT: String(WD_PORT),
+    },
     stdio: ['ignore', fd, fd],
   })
   closeSync(fd)
@@ -212,7 +222,7 @@ async function main() {
   try {
     // 3. 执行 WebDriver 协议验证
     const status = await waitForStatus(child)
-    console.log(`[probe] status: ok (${JSON.stringify((status.json as any).value)})`)
+    console.log(`[probe] status: ok (${JSON.stringify(status.json)})`)
 
     const sessionId = await createSession(child)
     console.log(`[probe] sessionId: ${sessionId}`)

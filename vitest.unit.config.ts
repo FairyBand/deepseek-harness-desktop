@@ -1,6 +1,9 @@
 import { fileURLToPath } from 'node:url'
 import { defineProject } from 'vitest/config'
+import { readManifest } from './scripts/bundle-metadata.mjs'
 import { SHARED_ALIAS } from './tooling.config'
+
+const remoteDshEngine = (readManifest(fileURLToPath(new URL('.', import.meta.url))).engines as { dsh: { recommend: string, minimum: string } }).dsh
 
 const optionalPrimitiveDependency = fileURLToPath(new URL('./test/setup/primitives-optional-deps.ts', import.meta.url))
 const optionalPrimitiveAliases = Object.fromEntries([
@@ -9,6 +12,10 @@ const optionalPrimitiveAliases = Object.fromEntries([
 ].map(name => [name, optionalPrimitiveDependency]))
 
 export default defineProject({
+  define: {
+    __REMOTE_DSH_RECOMMEND__: JSON.stringify(remoteDshEngine.recommend),
+    __REMOTE_DSH_MINIMUM__: JSON.stringify(remoteDshEngine.minimum),
+  },
   resolve: {
     alias: {
       ...SHARED_ALIAS,

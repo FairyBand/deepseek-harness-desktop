@@ -1,67 +1,21 @@
-/**
- * dsh-tauri-remote 远程机插件 E2E：真实 ssh2 传输层与真实 SSH 协议往返。
- *
- * 四条契约各占一个 describe，共用同一套 `bootHarness` 脚手架——装配真实的
- * 运行时单例（`transport` 服务 + `config/runtime.ts` 的 use* 装配面），宿主
- * 自身 `~/.ssh` 的别名与身份文件解析，带时间戳的 status/event 证据日志。
- * 事件证据走公开读面 `events.since(machineId, fromSeq)` 轮询：重构后事件类
- * 已不存在，轮询读回的每一行按 `event <stage>[/<terminal>]: <line>` 打平，
- * `at` 取事件自报的 `ts`，因此重连退避的间隔算术与轮询延迟无关。断言对象是
- * 外部世界（HTTP 字节、服务端记录的认证方法序列、被杀的 sshd 会话进程），
- * 不采信插件自报：
- * - reconnect：真实 linux x64 机器上杀掉服务端会话 → 自动重连 → 同一隧道 URL 继续服务；
- * - give-up：持续不可达的本机端口上的指数退避节奏与 given-up 终态；
- * - password-chain：回环 ssh2 协议服务器上的 agent→key→password 认证链与三类失败分类；
- * - watchdog：静默冻结（无 FIN/RST）连接上的 keepalive 看门狗。
- *
- * 环境降级标注（不得以 skip 掩盖）：
- * - password-chain：本机 22 端口关闭、无 docker、共享 dev 机 sshd 配置不可动，
- *   故无 OS sshd 可测——「OS-sshd password E2E 未验证（环境不可得）」，以本地
- *   ssh2 协议服务器替代证据；
- * - reconnect：需要可达的 `ssh dev` 别名机器。
- */
-
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { Connection, Server as SshServer } from 'ssh2'
-import type { MachineProfile, RemoteHostContext, RemoteSession } from '../../../packages/dsh-tauri-remote/src/host/types/index'
+import type { MachineProfile, RemoteSession } from '../../../packages/dsh-tauri-remote/src/host/types/index'
 import { Buffer } from 'node:buffer'
-import { execSync } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer, connect as tcpConnect } from 'node:net'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import process from 'node:process'
 import { join } from 'pathe'
 import { Server } from 'ssh2'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { clearHostRuntime, machineProfiles, setCurrentHostInstance, setHostConfig, setMachineDeps } from '../../../packages/dsh-tauri-remote/src/host/config/runtime'
-import { events } from '../../../packages/dsh-tauri-remote/src/host/service/events'
-import { machine } from '../../../packages/dsh-tauri-remote/src/host/service/machine'
-import { sshTransport } from '../../../packages/dsh-tauri-remote/src/host/service/transport.ssh'
+import { clearHostRuntime } from '../../../packages/dsh-tauri-remote/src/host/config/runtime'
 import { MachineId } from '../../../packages/dsh-tauri-remote/src/host/types/index'
-import { EMPTY_ALLOWLIST } from '../../../packages/dsh-tauri-remote/src/host/utils/allowlist'
-
-/** One timestamped evidence line. */
-interface EvidenceLine {
-  at: number
-  text: string
-}
-
-/** The E2E harness: the assembled runtime service plus captured evidence. */
-interface Harness {
-  manager: typeof machine
-  evidence: EvidenceLine[]
-  drain: () => void
-  log: (text: string) => void
-  dispose: () => Promise<void>
-}
-
-/** A monotonic-ish wall clock in epoch ms. */
-function now(): number {
-  return Date.now()
-}
+import { RECOMMENDED_DSH_VERSION } from '../../../packages/dsh-tauri-remote/src/host/utils/version'
+import { bootHarness, waitFor } from '../support/ssh'
 
 /** One freshly generated RSA key in PKCS#1 PEM form (what ssh2 parses natively). */
 function freshRsaPem(): string {
@@ -69,304 +23,14 @@ function freshRsaPem(): string {
   return String(privateKey.export({ format: 'pem', type: 'pkcs1' }))
 }
 
-/**
- * The minimal host context the runtime needs: the E2E suite drives the
- * services directly, so nothing is ever registered on the web server and no
- * effect is ever mounted.
- */
-function hostContextStub(): RemoteHostContext {
-  return {
-    webServer: { register: () => () => {} },
-    effect: () => undefined,
-  }
-}
-
-/** Every `it` leaves no runtime behind (assembly is process-global state). */
 afterEach(() => {
   clearHostRuntime()
 })
-
-/**
- * Boot one real-transport runtime with scratch TOFU/state storage and the
- * given connect/reconnect timing, logging every status and event emission
- * with a timestamp.
- *
- * Assembly order is the production one (`apply.ts` is the only other caller):
- * clear the runtime → bind the host instance → `setHostConfig` → `setMachineDeps`.
- */
-function bootHarness(options: {
-  connectTimeoutMs?: number
-  keepaliveIntervalMs?: number
-  keepaliveCountMax?: number
-  reconnectInitialDelayMs?: number
-  reconnectMaxDelayMs?: number
-  reconnectMaxAttempts?: number
-  healthPollIntervalMs?: number
-  healthPollAttempts?: number
-  sshDir?: string
-} = {}): Harness {
-  const evidence: EvidenceLine[] = []
-  const t0 = now()
-  const root = mkdtempSync(join(tmpdir(), 'dsh-ssh-e2e-'))
-  const seenSeq = new Map<MachineId, number>()
-
-  /**
-   * Read the public event surface forward from the last seen seq. `at` is the
-   * event's own timestamp, so the retry spacing is exact regardless of how
-   * often this poller happens to run.
-   */
-  const drain = (): void => {
-    for (const machineId of machineProfiles.keys()) {
-      const after = seenSeq.get(machineId) ?? 0
-      const page = events.since(machineId, after)
-      // Advance only past events actually handed over: `nextSeq` is the
-      // buffer's own next seq and would skip events appended after the poll.
-      const last = page.events.at(-1)?.seq
-      if (last !== undefined)
-        seenSeq.set(machineId, last)
-      for (const event of page.events) {
-        const at = Date.parse(event.ts)
-        evidence.push({
-          at: Number.isNaN(at) ? now() : at,
-          text: `event ${event.stage}${event.terminal === undefined ? '' : `/${event.terminal}`}: ${event.line}`,
-        })
-      }
-    }
-  }
-
-  const log = (text: string): void => {
-    drain()
-    const line = { at: now(), text }
-    evidence.push(line)
-    // eslint-disable-next-line no-console -- the E2E evidence log is the point
-    console.log(`[+${(line.at - t0).toString().padStart(6)}ms] ${text}`)
-  }
-
-  clearHostRuntime()
-  setCurrentHostInstance(hostContextStub())
-  setHostConfig({
-    connectTimeoutMs: options.connectTimeoutMs ?? 15_000,
-    healthCheckTimeoutMs: 3_000,
-    healthPollIntervalMs: options.healthPollIntervalMs ?? 500,
-    healthPollAttempts: options.healthPollAttempts ?? 30,
-    keepaliveIntervalMs: options.keepaliveIntervalMs ?? 3_000,
-    keepaliveCountMax: options.keepaliveCountMax ?? 3,
-    reconnectInitialDelayMs: options.reconnectInitialDelayMs ?? 1_000,
-    reconnectMaxDelayMs: options.reconnectMaxDelayMs ?? 5_000,
-    reconnectMaxAttempts: options.reconnectMaxAttempts ?? 6,
-    // The host's real ~/.ssh: config aliases and identity files, exactly
-    // what the plugin in the desktop app would resolve against.
-    sshDir: options.sshDir ?? join(homedir(), '.ssh'),
-    // Scratch TOFU + machine table: the suite must never touch ~/.dsh.
-    knownHostsPath: join(root, 'known-hosts.json'),
-    statePath: join(root, 'machines.json'),
-  })
-  setMachineDeps({
-    transport: { resolve: () => sshTransport },
-    emitStatus: (statusId, status) => {
-      const hints = [
-        status.state,
-        ...status.tunnelBaseUrl === undefined ? [] : [`tunnel=${status.tunnelBaseUrl}`],
-        ...status.nextRetryAt === undefined ? [] : [`nextRetryAt=+${status.nextRetryAt - now()}ms`],
-        ...status.authMethod === undefined ? [] : [`auth=${status.authMethod}`],
-        ...status.lastError === undefined ? [] : [`lastError=${status.lastError}`],
-      ]
-      log(`status ${String(statusId)}: ${hints.join(' ')}`)
-    },
-    localAllowlist: () => ({ ...EMPTY_ALLOWLIST }),
-  })
-  const poller = setInterval(drain, 50)
-
-  return {
-    manager: machine,
-    evidence,
-    drain,
-    log,
-    dispose: async () => {
-      clearInterval(poller)
-      drain()
-      await machine.dispose()
-      clearHostRuntime()
-      rmSync(root, { recursive: true, force: true })
-    },
-  }
-}
-
-/** Wait until the predicate holds or the deadline passes (step-probe wait). */
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 30_000): Promise<void> {
-  const deadline = now() + timeoutMs
-  while (!predicate()) {
-    if (now() > deadline)
-      throw new Error(`timed out waiting for ${label}`)
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-}
 
 /** Brand a machine id. */
 function id(name: string): ReturnType<typeof MachineId> {
   return MachineId(name)
 }
-
-/**
- * Whether the operator's `~/.ssh/config` declares a host alias. The drop spec
- * needs a real sshd it may kill a session on, so it can only be verified where
- * such an alias exists; the gate reads the config file itself (no network) and
- * the reason is printed, so a skipped run is never a silent one.
- */
-function sshConfigDeclaresHost(host: string): boolean {
-  try {
-    return readFileSync(join(homedir(), '.ssh', 'config'), 'utf8')
-      .split('\n')
-      .some((line) => {
-        const declared = /^Host[ \t]+(\S.*)$/iu.exec(line.trim())?.[1]
-        return declared !== undefined && declared.split(/\s+/u).includes(host)
-      })
-  }
-  catch {
-    return false
-  }
-}
-
-/** The alias the drop spec drives (the gate for verifying it). */
-const DROP_HOST_ALIAS = 'dev'
-
-const dropHostAvailable = sshConfigDeclaresHost(DROP_HOST_ALIAS)
-
-if (!dropHostAvailable) {
-  console.warn(`[e2e] skipping the reconnect drop spec: ~/.ssh/config declares no \`${DROP_HOST_ALIAS}\` host to kill a session on`)
-}
-
-/**
- * E2E #1 — drop-driven auto-reconnect on a real linux x64 machine.
- *
- * Flow: connect to `ssh dev` (a python3 HTTP server stands in for the remote
- * `dsh web` instance — the dev host has no Node/dsh and the clone-path
- * install cannot run there; the connection/tunnel/poll surface under test is
- * identical), verify the tunnel serves HTTP, kill exactly the sshd session
- * process serving OUR connection (identified as the one new session worker
- * that appeared while connecting; never the listener, never a global
- * restart), and watch the manager walk connected → reconnecting → connected
- * with the SAME tunnel URL serving HTTP again.
- *
- * Environment gate: this spec is the only one in the suite that cannot be
- * stood in for — it kills a live sshd session, so it needs the operator's own
- * `dev` alias. Without that alias the describe is reported as skipped (with
- * the reason printed above), never silently passed; a machine that has `dev`
- * verifies the real contract.
- */
-describe.skipIf(!dropHostAvailable)('e2e reconnect (linux x64 dev machine)', () => {
-  const REMOTE_PORT = 3100
-
-  const profile: MachineProfile = {
-    id: id('dev-drop'),
-    name: 'dev-drop',
-    host: DROP_HOST_ALIAS,
-    port: 22,
-    user: '',
-    // The remote instance stand-in: any loopback HTTP listener exercises the
-    // same probe → start → healthy → tunnel path.
-    startCommand: `python3 -m http.server ${REMOTE_PORT} --bind 127.0.0.1`,
-    remotePort: REMOTE_PORT,
-  }
-
-  /**
-   * The dev host's container hides /proc/net from `ss`, so peer-port matching
-   * is unavailable. Instead: snapshot the sshd session workers (the
-   * `sshd-session: …@notty` processes, excluding the probe's own session via
-   * `$PPID` and the privileged parents), and diff around our connect.
-   */
-  function sshdSessionWorkers(): Set<number> {
-    const out = execSync(
-      `ssh dev 'echo OWN=$PPID; ps -eo pid=,cmd= | grep "[s]shd-session"'`,
-      { encoding: 'utf8' },
-    )
-    const own = Number(out.match(/OWN=(\d+)/u)?.[1] ?? NaN)
-    const workers = new Set<number>()
-    for (const line of out.split('\n')) {
-      const pid = Number(line.trim().match(/^(\d+)\s/u)?.[1] ?? NaN)
-      if (!Number.isFinite(pid) || pid === own)
-        continue
-      if (line.includes('[priv]'))
-        continue
-      if (line.includes('@'))
-        workers.add(pid)
-    }
-    return workers
-  }
-
-  it('recovers a server-side session kill with the same tunnel URL', async () => {
-    const harness = bootHarness({ keepaliveIntervalMs: 3_000, reconnectInitialDelayMs: 1_000, reconnectMaxDelayMs: 5_000, reconnectMaxAttempts: 6 })
-    const { manager, log } = harness
-    try {
-      manager.refreshProfiles(new Map([[profile.id, profile]]))
-
-      // 1. Connect and verify the tunnel serves HTTP (the "polling" probe).
-      const beforeSessions = sshdSessionWorkers()
-      const link = await manager.connect(profile.id)
-      expect(manager.status(profile.id).state).toBe('connected')
-      const afterSessions = sshdSessionWorkers()
-      const fresh = [...afterSessions].filter(pid => !beforeSessions.has(pid))
-      const before = await fetch(link.tunnelBaseUrl)
-      expect(before.status).toBe(200)
-      log(`tunnel serves HTTP ${before.status} at ${link.tunnelBaseUrl}`)
-      // A second URL through the same tunnel proves a real HTTP round trip.
-      const deep = await fetch(`${link.tunnelBaseUrl}/definitely-missing`)
-      expect(deep.status).toBe(404)
-
-      // 2. Our session worker is exactly the one that appeared during the
-      //    connect; verify what we are about to kill before killing it.
-      expect(fresh.length).toBe(1)
-      const pid = fresh[0]!
-      const cmdOfPid = execSync(`ssh dev "ps -p ${pid} -o cmd="`, { encoding: 'utf8' }).trim()
-      expect(cmdOfPid, `refusing to kill non-sshd process: ${cmdOfPid}`).toMatch(/sshd-session/iu)
-      log(`identified session sshd pid=${pid} (${cmdOfPid}) as the connect-window diff`)
-
-      // 3. Kill exactly that process (targeted single PID, no restarts).
-      execSync(`ssh dev "kill ${pid}"`)
-      log(`killed session sshd pid=${pid}`)
-
-      // 4. The manager must walk reconnecting → connected on its own.
-      await waitFor(() => manager.status(profile.id).state === 'reconnecting', 'reconnecting state')
-      log('observed reconnecting state')
-      await waitFor(() => manager.status(profile.id).state === 'connected', 'auto-reconnect', 60_000)
-      const status = manager.status(profile.id)
-      expect(status.state).toBe('connected')
-      expect(['agent', 'key']).toContain(status.authMethod)
-      log(`auto-reconnected (auth=${status.authMethod})`)
-
-      // 5. Same URL, serving again: tunnel rebuilt on the preferred port.
-      expect(manager.link(profile.id)?.tunnelBaseUrl).toBe(link.tunnelBaseUrl)
-      const after = await fetch(link.tunnelBaseUrl)
-      expect(after.status).toBe(200)
-      log(`tunnel serves HTTP ${after.status} again at the SAME ${link.tunnelBaseUrl}`)
-
-      // 6. Clean teardown; a manual disconnect is `disconnected`, not given-up.
-      await manager.disconnect(profile.id)
-      expect(manager.status(profile.id).state).toBe('disconnected')
-
-      // 7. Leave the dev machine as we found it: stop the stand-in listener
-      //    (verify it is our python3 http.server before killing the PID).
-      const listenerLine = execSync(
-        `ssh dev "ss -tlnp '( sport = :${REMOTE_PORT} )' | grep ':${REMOTE_PORT} '"`,
-        { encoding: 'utf8' },
-      ).trim()
-      const listenerPid = listenerLine.match(/pid=(\d+)/u)?.[1]
-      if (listenerPid !== undefined) {
-        const listenerCmd = execSync(`ssh dev "ps -p ${listenerPid} -o cmd="`, { encoding: 'utf8' }).trim()
-        if (/http\.server/iu.test(listenerCmd)) {
-          execSync(`ssh dev "kill ${listenerPid}"`)
-          log(`stopped stand-in listener pid=${listenerPid} on remote port ${REMOTE_PORT}`)
-        }
-        else {
-          log(`left remote listener pid=${listenerPid} alone (not our http.server: ${listenerCmd})`)
-        }
-      }
-    }
-    finally {
-      await harness.dispose()
-    }
-  }, 240_000)
-})
 
 /**
  * E2E #2 — backoff rhythm and the give-up terminal state, driven by a
@@ -966,6 +630,24 @@ describe('e2e outbound gateway (loopback ssh2 protocol server)', () => {
             state.commands.push(command)
             if (command.includes('grep -oE') && command.includes('token=')) {
               stream.write(`${TOKEN}\n`)
+              stream.exit(0)
+              stream.end()
+              return
+            }
+            if (command.includes('REMOTE_DSH_LISTENER_PACKAGE')) {
+              stream.write(JSON.stringify({ name: '@deepseek-ai/dsh', version: RECOMMENDED_DSH_VERSION }))
+              stream.exit(0)
+              stream.end()
+              return
+            }
+            if (command.includes('REMOTE_DSH_LISTENER_PID')) {
+              stream.write([
+                'Linux',
+                '4242',
+                '/opt/remote-dsh',
+                '1760000000:987654',
+                '/usr/bin/node\0/opt/remote-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js\0',
+              ].join('\n'))
               stream.exit(0)
               stream.end()
               return

@@ -1,29 +1,10 @@
-import type { PasteInputActions, PasteOccurrence, PasteSessionInput, PasteTokenSpan } from './paste-collapse.types'
+import type { PasteOccurrence } from './paste-collapse.types'
 
 /** 超过该字符数的粘贴折叠成引用 chip；官方路径会把整段原文灌进编辑器，长文本即「一大串文字」。 */
 const PASTE_COLLAPSE_THRESHOLD = 500
 
 /** chip 标题（粘贴内容首行）的字符上限：chip 自身还有 240px 省略，这里只保证标题可读。 */
 const PASTE_TITLE_MAX_LENGTH = 24
-
-/**
- * 取插入 chip 用的选区快照（detect 坐标 + 修订号）。
- *
- * `0.1.5-rc.x` 的动作面只有 setDraft/submit，没有 `captureInsertion`；壳自身的 `caretSpan()`
- * 仍在，而 `0.1.7` 的 `captureInsertion` 实现就是「caretSpan + draftRev」。按能力探测取用，
- * 两条通路都缺席时返回 undefined，由调用方退回官方粘贴路径。
- */
-export function resolveInsertionSpan(
-  actions: PasteInputActions | undefined,
-  input: PasteSessionInput,
-): PasteTokenSpan | undefined {
-  const captured = actions?.captureInsertion?.()
-  if (captured !== undefined)
-    return captured
-  const caret = input.caretSpan?.()
-  const draftRev = input.state.getSnapshot().draftRev
-  return caret === undefined || draftRev === undefined ? undefined : { ...caret, draftRev }
-}
 
 /**
  * 是否接管这次粘贴：带文件的粘贴必须让给官方路径（它负责文件入草稿），空文本同样不接管。

@@ -229,14 +229,31 @@ pub fn is_e2e_run() -> bool {
     std::env::var_os(E2E_PORT_ENV_VAR).is_some_and(|v| !v.is_empty())
 }
 
+pub(crate) fn e2e_app_data_dir() -> Result<Option<std::path::PathBuf>, String> {
+    resolve_e2e_app_data_dir(is_e2e_run(), std::env::var_os("DSH_E2E_HOME").as_deref())
+}
+
+fn resolve_e2e_app_data_dir(
+    e2e: bool,
+    home: Option<&std::ffi::OsStr>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    if !e2e {
+        return Ok(None);
+    }
+    let home = home
+        .map(std::path::Path::new)
+        .filter(|home| home.is_absolute())
+        .ok_or_else(|| {
+            "STARTUP_E2E_HOME_INVALID: DSH_E2E_HOME must be a non-empty absolute path".to_string()
+        })?;
+    Ok(Some(home.join("app-data")))
+}
+
 /// 当前进程应使用的 Store 持久化文件名（生产 / 开发 / E2E 三方隔离的唯一真值）。
 ///
 /// store（端口、installed、active_core、窗口几何等）属于「应用数据」而非共用核心：
 /// 生产默认 3080、开发默认 3081，共用一份 store 会让两边端口一路漂移并相互污染状态；
 /// E2E 若复用开发文件，用例写入的窗口几何会覆盖用户正在使用的开发版配置。
-///
-/// 注意 `app_data_dir()` 在 Windows 上由 `SHGetKnownFolderPath` 解析，重定向
-/// `APPDATA` 环境变量**无法**把 store 引到 scratch 目录——三方隔离只能靠换文件名。
 pub fn store_dat_file_name() -> &'static str {
     resolve_store_dat_file(is_e2e_run(), cfg!(debug_assertions))
 }
@@ -337,7 +354,10 @@ pub(crate) fn read_store_dat_setting<R: Runtime>(app_handle: &AppHandle<R>) -> S
     setting_from_value(raw.as_ref())
 }
 
-fn write_store_dat_setting(app_handle: &AppHandle, setting: &Setting) -> serde_json::Value {
+fn write_store_dat_setting<R: Runtime>(
+    app_handle: &AppHandle<R>,
+    setting: &Setting,
+) -> serde_json::Value {
     let store = app_handle
         .store(store_dat_file_name())
         .expect("Failed to load store");
@@ -347,13 +367,14 @@ fn write_store_dat_setting(app_handle: &AppHandle, setting: &Setting) -> serde_j
     value
 }
 
-fn emit_setting(app_handle: &AppHandle, value: &serde_json::Value) {
+fn emit_setting<R: Runtime>(app_handle: &AppHandle<R>, value: &serde_json::Value) {
     app_handle
         .emit("setting_updated", value)
         .expect("Failed to emit event");
 }
 
 fn preserve_persisted_fields(mut replacement: Setting, current: &Setting) -> Setting {
+    replacement.active_core.clone_from(&current.active_core);
     replacement.proxy_url.clone_from(&current.proxy_url);
     replacement.appearance.clone_from(&current.appearance);
     replacement.zoom_factor = normalize_zoom_factor(current.zoom_factor);
@@ -370,7 +391,7 @@ fn preserve_persisted_fields(mut replacement: Setting, current: &Setting) -> Set
 
 /// 兼容旧调用方的整对象写入，但始终保留锁内读到的最新缩放、关窗动作、桌宠与本地
 /// 插件热重载等持久字段，避免长流程用陈旧 `Setting` 覆盖精确更新路径刚写入的值（丢更新）。
-pub fn set_store_dat_setting(app_handle: &AppHandle, mut setting: Setting) {
+pub fn set_store_dat_setting<R: Runtime>(app_handle: &AppHandle<R>, mut setting: Setting) {
     let value = {
         let _guard = setting_write_lock()
             .lock()
@@ -384,7 +405,7 @@ pub fn set_store_dat_setting(app_handle: &AppHandle, mut setting: Setting) {
 }
 
 /// 在一个短临界区内读取、修改并写回设置，避免多个精确字段更新彼此丢失。
-pub fn update_store_dat_setting<F>(app_handle: &AppHandle, update: F) -> Setting
+pub fn update_store_dat_setting<R: Runtime, F>(app_handle: &AppHandle<R>, update: F) -> Setting
 where
     F: FnOnce(&mut Setting),
 {
@@ -433,9 +454,9 @@ mod tests {
     use super::{
         default_close_action, default_zoom_factor, force_xwayland_in_store_json,
         normalize_close_action, normalize_setting, normalize_zoom_factor,
-        preserve_persisted_fields, resolve_store_dat_file, setting_from_value, unwrap_json_value,
-        Setting, STORE_DAT_DEV_FILE, STORE_DAT_FILE, STORE_DAT_TEST_FILE, STORE_SETTING_KEY,
-        ZOOM_FACTOR_MAX, ZOOM_FACTOR_MIN,
+        preserve_persisted_fields, resolve_e2e_app_data_dir, resolve_store_dat_file,
+        setting_from_value, unwrap_json_value, Setting, STORE_DAT_DEV_FILE, STORE_DAT_FILE,
+        STORE_DAT_TEST_FILE, STORE_SETTING_KEY, ZOOM_FACTOR_MAX, ZOOM_FACTOR_MIN,
     };
 
     /// 启动前读取跑在 `logger::init()` 之前，任何损坏输入都只能静默回落到关闭。
@@ -482,6 +503,46 @@ mod tests {
         };
         let raw = serde_json::json!({ STORE_SETTING_KEY: setting }).to_string();
         assert!(force_xwayland_in_store_json(&raw));
+    }
+
+    #[test]
+    fn e2e_app_data_requires_an_absolute_scratch_home() {
+        for home in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("scratch"),
+            Some("./scratch"),
+        ] {
+            let error = resolve_e2e_app_data_dir(true, home.map(std::ffi::OsStr::new)).unwrap_err();
+            assert_eq!(
+                error,
+                "STARTUP_E2E_HOME_INVALID: DSH_E2E_HOME must be a non-empty absolute path"
+            );
+        }
+        #[cfg(windows)]
+        for home in [r"C:scratch", r"\scratch"] {
+            assert!(resolve_e2e_app_data_dir(true, Some(std::ffi::OsStr::new(home))).is_err());
+        }
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_e2e_app_data_dir(true, Some(home.path().as_os_str())).unwrap(),
+            Some(home.path().join("app-data"))
+        );
+        assert!(!home.path().join("app-data").exists());
+    }
+
+    #[test]
+    fn normal_runs_ignore_e2e_home() {
+        let home = tempfile::tempdir().unwrap();
+        for candidate in [
+            None,
+            Some(std::ffi::OsStr::new("")),
+            Some(std::ffi::OsStr::new("scratch")),
+            Some(home.path().as_os_str()),
+        ] {
+            assert_eq!(resolve_e2e_app_data_dir(false, candidate), Ok(None));
+        }
     }
 
     #[test]
@@ -772,6 +833,26 @@ mod tests {
             merged.local_plugin_hmr,
             "整对象写入不得覆盖最新的本地插件热重载开关"
         );
+    }
+
+    #[test]
+    fn stale_setting_writes_cannot_replace_the_latest_active_core() {
+        for active_core in [None, Some("app"), Some("local")] {
+            for stale_core in [None, Some("app"), Some("local")] {
+                let current = Setting {
+                    active_core: active_core.map(str::to_owned),
+                    ..Default::default()
+                };
+                let stale = Setting {
+                    active_core: stale_core.map(str::to_owned),
+                    language: "en-US".into(),
+                    ..Default::default()
+                };
+                let merged = preserve_persisted_fields(stale, &current);
+                assert_eq!(merged.active_core.as_deref(), active_core);
+                assert_eq!(merged.language, "en-US");
+            }
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ import {
   launchDshBrowser,
   newDshPage,
   openSettings,
+  openSettingsMenu,
   SETTINGS_SIDEBAR,
   SETTINGS_TRIGGER,
 } from '../support/browser'
@@ -38,11 +39,7 @@ function headers(): Record<string, string> {
 /** 插件接管后的英雄区工作区 chip（`ui/hero-workspace.tsx` 渲染）。 */
 const HERO_WORKSPACE_CHIP = '[data-hero-workspace]'
 
-/**
- * 官方英雄区工作区 chip：与插件 chip 共用 aria-label（官方 conversation 词典 `hero.chooseWorkspace`），
- * 用 `:not([data-hero-workspace])` 把两者分开。官方行类名取自官方 ConversationRoot 模块。
- */
-const OFFICIAL_HERO_WORKSPACE_CHIP = '[class$="heroWorkspaceRow"] button[aria-label="选择工作区"]:not([data-hero-workspace])'
+const OFFICIAL_HERO_WORKSPACE_CHIP = '[class$="heroWorkspaceRow"] button[class$="workspace"][aria-haspopup="menu"]:not([data-hero-workspace])'
 
 /**
  * 官方侧边栏「新建会话」按钮（官方 sidebar 词典 `session.new.label`）。
@@ -128,7 +125,9 @@ describe('L2 客户端', () => {
     const app = await newDshPage(browser, { ready: SETTINGS_TRIGGER })
     try {
       const triggerHost = await app.frame.evaluate(() => {
-        const trigger = document.querySelector('[data-settings-trigger]')
+        // rc.1 起官方账号菜单占据 `sidebar.settings` 座位，`data-settings-trigger` 只是
+        // 老核心无 launcher 时的兜底；两种形态都必须是侧栏内的原生 button。
+        const trigger = document.querySelector('[data-settings-trigger], [data-slot="settings.launcher"] button[aria-haspopup]')
         const sidebar = document.querySelector('[data-slot="sidebar"]')
         return {
           triggerInsideSidebar: Boolean(trigger && sidebar?.contains(trigger)),
@@ -155,7 +154,7 @@ describe('L2 客户端', () => {
       expect(state.hasSearch, '设置侧栏必须带搜索框').toBe(true)
       expect(state.navLabels.length, '设置侧栏必须至少渲染一个导航项').toBeGreaterThan(0)
       expect(state.navLabels, '插件分区与核心分区必须同时出现在同一侧栏').toContain('宠物')
-      expect(state.navLabels, '本插件提供的设置分区必须在同一侧栏').toContain('插件')
+      expect(state.navLabels, '核心内置插件分区必须与插件分区共用同一侧栏').toContain('内置插件')
       expect(state.railWidth, '侧栏宽度必须落在插件声明的 264–420px 夹紧区间内（插件不覆写宿主宽度）')
         .toBeGreaterThanOrEqual(264)
       expect(state.railWidth!).toBeLessThanOrEqual(420)
@@ -167,28 +166,37 @@ describe('L2 客户端', () => {
     }
   })
 
-  it('验证触发器 aria-expanded 随设置侧栏开合变化', async () => {
+  it('验证设置入口开合与设置侧栏可见性', async () => {
     const app = await newDshPage(browser, { ready: SETTINGS_TRIGGER })
     try {
       const trigger = app.frame.locator(SETTINGS_TRIGGER).first()
       expect(await trigger.getAttribute('aria-expanded'), '初始必须为 false').toBe('false')
       expect(await app.frame.locator(SETTINGS_SIDEBAR).count(), '初始不得渲染设置侧栏').toBe(0)
 
+      // rc.1 的入口是官方账号菜单：`aria-expanded` 只反映菜单自身开合，
+      // 选中「设置」条目后菜单收起，侧栏由壳层 relay 打开。
+      await openSettingsMenu(app.page, app.frame, app.syntheticFallbacks)
+      expect(await trigger.getAttribute('aria-expanded'), '菜单展开时必须为 true').toBe('true')
+      await app.page.keyboard.press('Escape')
+      await expect.poll(
+        async () => await trigger.getAttribute('aria-expanded'),
+        { timeout: 10_000, message: 'Escape 关闭菜单后必须回到 false' },
+      ).toBe('false')
+
       await openSettings(app.page, app.frame, app.syntheticFallbacks)
-      expect(await trigger.getAttribute('aria-expanded'), '首次点击后必须为 true').toBe('true')
       await expect.poll(
         async () => await app.frame.locator(SETTINGS_SIDEBAR).first().isVisible(),
         { timeout: 10_000, message: '展开后设置侧栏必须可见' },
       ).toBe(true)
 
-      // 展开态下设置触发器被设置侧栏整体盖住（`trigger.boundingBox()` 为 null），
+      // 展开态下设置入口被设置侧栏整体盖住（`trigger.boundingBox()` 为 null），
       // 收起只能走侧栏自身的 Escape 通道（`sidebar.tsx` 的 keydown 监听）。
       await app.page.keyboard.press('Escape')
       await expect.poll(
-        async () => await trigger.getAttribute('aria-expanded'),
-        { timeout: 10_000, message: 'Escape 后必须回到 false' },
-      ).toBe('false')
-      expect(await app.frame.locator(SETTINGS_SIDEBAR).count(), '收起后设置侧栏必须卸载').toBe(0)
+        async () => await app.frame.locator(SETTINGS_SIDEBAR).count(),
+        { timeout: 10_000, message: '收起后设置侧栏必须卸载' },
+      ).toBe(0)
+      expect(await trigger.getAttribute('aria-expanded'), '收起后入口不得停在展开态').toBe('false')
       expectNoSyntheticFallbacks(app)
       expect(app.errors, '开合不得抛出应用级错误').toEqual([])
     }
@@ -251,24 +259,25 @@ describe('L2 客户端', () => {
   it('验证英雄区工作区选择被插件接管，官方 chip 让位且菜单首位是「未分组」', async () => {
     const app = await newDshPage(browser, { ready: HERO_WORKSPACE_CHIP })
     try {
-      // 官方 chip 与插件 chip 共用 aria-label（官方 conversation 词典 `hero.chooseWorkspace`），
-      // 用类名把两者分开：官方那枚必须仍在 DOM 里（接管失败时可原样回来）但被样式隐藏。
       const chips = await app.frame.evaluate((officialSelector) => {
         const row = document.querySelector('[class$="heroWorkspaceRow"]')
-        const official = row?.querySelector(officialSelector) ?? null
+        const official = row?.querySelectorAll(officialSelector) ?? []
+        const ours = row?.querySelector('[data-hero-workspace]') ?? null
         return {
           rowExists: row !== null,
-          officialInRow: official !== null,
-          officialDisplay: official === null ? null : getComputedStyle(official).display,
-          oursInRow: row?.querySelector('[data-hero-workspace]') !== null,
+          officialCount: official.length,
+          officialDisplays: Array.from(official, chip => getComputedStyle(chip).display),
+          oursInRow: ours !== null,
+          oursSlot: ours?.closest('[data-slot]')?.getAttribute('data-slot') ?? null,
           oursCount: document.querySelectorAll('[data-hero-workspace]').length,
         }
       }, OFFICIAL_HERO_WORKSPACE_CHIP)
 
       expect(chips.rowExists, '英雄区工作区行必须存在（否则这条断言没有目标）').toBe(true)
-      expect(chips.officialInRow, '官方 chip 必须仍在 DOM 中：接管条目退位时要能原样回来').toBe(true)
-      expect(chips.officialDisplay, '官方 chip 必须被隐藏，否则会出现两枚选择控件').toBe('none')
+      expect(chips.officialCount, '官方旧 chip 必须保留且唯一，不依赖其本地化 aria-label').toBe(1)
+      expect(chips.officialDisplays, '官方旧 chip 必须被隐藏，否则会出现两枚选择控件').toEqual(['none'])
       expect(chips.oursInRow, '接管后的 chip 必须渲染在官方同一行内').toBe(true)
+      expect(chips.oursSlot, '插件 chip 必须占据官方英雄区工作区槽位').toBe('conversation.hero.workspace')
       expect(chips.oursCount, '接管后的 chip 必须唯一').toBe(1)
 
       const capability = await app.frame.evaluate(() => document.documentElement.getAttribute('data-dsh-composer-cwd'))
@@ -331,9 +340,12 @@ describe('L2 客户端', () => {
     const app = await newDshPage(browser, { ready: HERO_WORKSPACE_CHIP })
     try {
       const before = await app.frame.evaluate(() => ({
+        card: document.querySelector('[data-composer-card]') !== null,
         inert: document.querySelector('[data-composer-card] [aria-label="选择工作区"]') !== null,
       }))
-      expect(before.inert, '夹具前置：没有会话时 composer 是官方的「选择工作区」触发器').toBe(true)
+      // 共享宿主里前面的用例可能已经留下会话/草稿，composer 未必还停在
+      // 「必须先选工作区」态；夹具只要求 composer 已挂载，产品断言交给点击之后的 poll。
+      expect(before.card, '夹具前置：composer 必须已挂载').toBe(true)
 
       // 品牌按钮与工具栏按钮共用 aria-label（官方 sidebar 词典 `session.new.label`），两者都是
       // 「新建会话」入口、都该走未分组；工作区分组行的「+」是另一条带工作区名字的文案，

@@ -558,12 +558,12 @@ describe('session.resume', () => {
     expect(await session.resume('unknown')).toEqual({ ok: false, code: 404, error: '会话不存在或尚未运行' })
   })
 
-  it('reads the log through the legacy fallbacks', async () => {
-    const log = [turnEnd('aborted')]
-    setup({ session: { log } })
-    expect(await session.resume('s1')).toEqual({ ok: true })
-    setup({ session: { events: log } })
-    expect(await session.resume('s1')).toEqual({ ok: true })
+  it('does not interpret removed log or events properties as current session history', async () => {
+    const log = [turnEnd('completed')]
+    for (const source of [{ log }, { events: log }]) {
+      setup({ session: source })
+      expect(await session.resume('s1')).toEqual({ ok: true })
+    }
   })
 
   it('treats an unreadable log as continuable rather than blocking the user', async () => {

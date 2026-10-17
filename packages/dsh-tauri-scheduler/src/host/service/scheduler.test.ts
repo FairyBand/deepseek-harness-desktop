@@ -34,7 +34,7 @@ interface AgentInput {
   sessionId: string
   meta: { cwd: string, agentPreset: string }
   agentOptions: { provider?: string, model?: string }
-  setup: (agentCtx: unknown, createdAgent?: SetupAgentLike) => Promise<void>
+  setup: (agentCtx: unknown, agent: SetupAgentLike) => Promise<void>
 }
 
 interface NewAgentControl {

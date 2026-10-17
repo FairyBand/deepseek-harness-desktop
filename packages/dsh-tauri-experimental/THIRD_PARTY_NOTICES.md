@@ -3,10 +3,12 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the per-turn Git snapshot and file restore path are this repo's own; only the input-dock chip mirrors the official deliverables row.
 
@@ -17,7 +19,7 @@ Mirrored official surface:
 - Dock order: the chip is ordered against the official dock rows (official `todo` = 0, `goal` = 10, `queue` = 20, worktree banner = -10); a negative order places it above the official task list and worktree banner (`src/client/constants/index.ts:12`, `src/client/register/running-chip.ts:5`).
 - Official reference chips (`ctx.conversation.input` insertion path) → `src/client/register/paste-collapse.ts`: large pastes collapse into the official reference chip through the official public surface only.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The reference-insertion, source-codec, and revision-guarded span contracts used by paste collapse remain available. This package does not override the removed composer `stats` registration.
 - The independent `activity` and `usage` dock entries are supplied by the target core; the running-changes chip keeps its separate registration and order.

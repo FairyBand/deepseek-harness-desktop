@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { REMOTE_ROOT } from '../config/constants'
 import { MachineId } from '../types/index'
 import { DSH_MIRROR_PREFIXES } from '../utils/assets'
-import { FALLBACK_DSH_TAG, RECOMMENDED_DSH_VERSION } from '../utils/version'
 import {
   buildInstallScript,
   bundleProbeCommand,
@@ -22,7 +21,6 @@ import {
   ensurePnpmCommand,
   ensureRemoteInstance,
   firstLineOf,
-  legacyProbeCommand,
   missingComponentsOf,
   normalizeNpmIntegrity,
   parseBootstrapLine,
@@ -30,6 +28,7 @@ import {
   readEnvCredentials,
   REMOTE_PROBE_NO_DOWNLOADER,
   rootProbeCommand,
+  rootStatusProbeCommand,
   skippedVerificationSummary,
   splitBundleProbeStdout,
   startCommandFor,
@@ -46,9 +45,8 @@ const profile: MachineProfile = {
 
 const PKG_REPO = 'dsh-tauri-desk/deepseek-harness-pkg'
 
-/** The pinned core and its release/npm shapes: fixtures follow the pin, never the reverse. */
-const DSH_VERSION = RECOMMENDED_DSH_VERSION
-const DSH_TAG = `dsh-${DSH_VERSION}-36556493178`
+const DSH_VERSION = '0.2.1-rc.1'
+const DSH_TAG = 'dsh-0.2.1-rc.1-39009013600'
 const DSH_TGZ = `dsh-${DSH_VERSION}.tgz`
 const NPM_TGZ = `https://registry.npmjs.org/@deepseek-ai/dsh/-/${DSH_TGZ}`
 const MIRROR_TGZ = `https://registry.npmmirror.com/@deepseek-ai/dsh/-/${DSH_TGZ}`
@@ -104,11 +102,14 @@ function stubGithub(): void {
 
 class FakeSession implements RemoteSession {
   commands: string[] = []
+  dshVersion = '0.2.1-rc.1'
 
   constructor(private readonly responder: (command: string, index: number) => RemoteExecResult) {}
 
   exec(command: string, _options?: RemoteExecOptions): Promise<RemoteExecResult> {
     this.commands.push(command)
+    if (command.includes('REMOTE_DSH_PACKAGE'))
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ version: this.dshVersion }), stderr: '' })
     return Promise.resolve(this.responder(command, this.commands.length - 1))
   }
 
@@ -296,7 +297,7 @@ describe('planRemoteInstall', () => {
     }))
     if (plan.dsh.kind !== 'pkg-zip')
       throw new Error('expected pkg-zip')
-    expect(plan.dsh.tag).toBe(FALLBACK_DSH_TAG)
+    expect(plan.dsh.tag).toBe('dsh-0.2.1-rc.1-39009013600')
     expect(plan.notes.join('\n')).toContain('release 列表获取失败')
   })
 
@@ -304,11 +305,11 @@ describe('planRemoteInstall', () => {
     const repos: string[] = []
     const plan = await planRemoteInstall('Linux 6.8 x86_64', {
       installRepo: 'https://github.com/my-org/deepseek-harness-pkg.git',
-      installRef: '0.1.1-rc.1',
+      installRef: '0.1.7-rc.1',
     }, {
       listReleases: (repo) => {
         repos.push(repo)
-        return Promise.resolve(RELEASES)
+        return Promise.resolve([{ tag: 'dsh-0.1.7-rc.1-42', prerelease: false }, ...RELEASES])
       },
       listAssets: () => Promise.resolve(LINUX_ASSETS),
       npmDist: () => Promise.reject(new Error('unused')),
@@ -316,7 +317,7 @@ describe('planRemoteInstall', () => {
     expect(repos).toEqual(['my-org/deepseek-harness-pkg'])
     if (plan.dsh.kind !== 'pkg-zip')
       throw new Error('expected pkg-zip')
-    expect(plan.dsh.tag).toBe('dsh-0.1.1-rc.1-32342588166')
+    expect(plan.dsh.tag).toBe('dsh-0.1.7-rc.1-42')
   })
 
   it('rejects platforms outside the matrix before any network use', async () => {
@@ -593,7 +594,7 @@ describe('install script execution (real POSIX sh)', () => {
     // dsh dist: the npm package layout (package.json + lib/bin.js).
     const dshStage = join(work, 'dsh-stage')
     mkdirSync(join(dshStage, 'package', 'lib'), { recursive: true })
-    writeFileSync(join(dshStage, 'package', 'package.json'), '{"name":"@deepseek-ai/dsh","version":"0.1.2-rc.1"}\n')
+    writeFileSync(join(dshStage, 'package', 'package.json'), '{"name":"@deepseek-ai/dsh","version":"0.2.1-rc.1"}\n')
     writeFileSync(join(dshStage, 'package', 'lib', 'bin.js'), '#!/usr/bin/env node\nvoid 0\n')
     const dshTgz = join(served, DSH_TGZ)
     await promisify(execFile)('tar', ['-czf', dshTgz, '-C', dshStage, 'package'])
@@ -946,15 +947,14 @@ describe('probe execution (real POSIX sh)', () => {
     }
   })
 
-  it('legacy verdict probe: wget 6/8 answer 4xx/5xx, exit 4 is no answer', async () => {
-    for (const fake of [WGET_AUTH_CHALLENGE, WGET_SERVER_ERROR]) {
-      const answered = await runProbe(legacyProbeCommand(3080, 2500), tempDir(), { wget: fake })
-      expect(answered).toMatchObject({ code: 0, stdout: '4xx/5xx\n' })
+  it('reports exact wget HTTP status instead of treating every server error as ready', async () => {
+    for (const status of [200, 401, 404, 500]) {
+      const fake = `#!/bin/sh\nprintf '  HTTP/1.1 302 Found\\n  HTTP/1.1 ${status} Response\\n' >&2\nexit ${status < 400 ? 0 : 8}\n`
+      const answered = await runProbe(rootStatusProbeCommand(3080, 2500), tempDir(), { wget: fake })
+      expect(answered).toMatchObject({ code: 0, stdout: `${status}\n` })
     }
-    const refused = await runProbe(legacyProbeCommand(3080, 2500), tempDir(), { wget: WGET_REFUSED })
+    const refused = await runProbe(rootStatusProbeCommand(3080, 2500), tempDir(), { wget: WGET_REFUSED })
     expect(refused.code).not.toBe(0)
-    const healthy = await runProbe(legacyProbeCommand(3080, 2500), tempDir(), { wget: '#!/bin/sh\nexit 0\n' })
-    expect(healthy).toMatchObject({ code: 0, stdout: '200\n' })
   })
 })
 
@@ -1050,7 +1050,7 @@ describe('credentials copy execution (real POSIX sh)', () => {
 const BOOT_HTML = [
   '<html><head>',
   '<script src="/plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=1"></script>',
-  '</head><body><script>globalThis["__DSH_BOOT__"] = {"entries":[{"url":"/plugins/@deepseek-ai/dsh-client-ui-layout/client.js"}]};</script></body></html>',
+  '</head><body><script>globalThis["__DSH_BOOT__"] = {"release":{"version":"0.2.1-rc.1"},"entries":[{"url":"/plugins/@deepseek-ai/dsh-client-ui-layout/client.js"}]};</script></body></html>',
 ].join('')
 
 const BOOTSTRAP = {
@@ -1090,18 +1090,36 @@ describe('ensureRemoteInstance', () => {
     expect(events).toEqual([{ stage: 'ready', line: expect.stringContaining('已就绪'), terminal: 'success' }])
   })
 
-  it('falls back to the legacy any-response verdict when the HTML carries no manifest', async () => {
+  it('accepts the supported auth fence when no boot manifest is exposed', async () => {
     const session = new FakeSession((command) => {
+      if (command.includes('REMOTE_DSH_LISTENER_PACKAGE'))
+        return { code: 0, stdout: '{"name":"@deepseek-ai/dsh","version":"0.1.7-rc.1"}', stderr: '' }
+      if (command.includes('REMOTE_DSH_LISTENER_PID'))
+        return { code: 0, stdout: 'Linux\n424242\n/opt/work\n123 456\n/usr/bin/node\0/opt/dsh/lib/bin.js\0', stderr: '' }
       if (command.includes('/dev/null'))
-        return { code: 0, stdout: '200', stderr: '' }
-      return { code: 0, stdout: '<html>an old instance without a boot graph</html>', stderr: '' }
+        return { code: 0, stdout: '401', stderr: '' }
+      return { code: 0, stdout: 'Unauthorized', stderr: '' }
     })
     const events: string[] = []
     await expect(ensureRemoteInstance(session, profile, BOOTSTRAP, {
       onEvent: (stage, line) => events.push(`${stage}: ${line}`),
     })).resolves.toBe('10.0.0.1:3080')
-    expect(events[0]).toContain('旧探测兜底')
-    expect(events[0]).toContain('root answered 200')
+    expect(events).toEqual(['ready: 远端实例已就绪（auth required (HTTP 401)）'])
+  })
+
+  it.each(['200', '404', '500'])('rejects a manifest-less HTTP %s as ready', async (status) => {
+    const session = new FakeSession((command) => {
+      if (command === 'uname -srm')
+        return { code: 0, stdout: 'Linux x86_64', stderr: '' }
+      if (command.includes('/dev/null'))
+        return { code: 0, stdout: status, stderr: '' }
+      return { code: 0, stdout: '<html>no boot graph</html>', stderr: '' }
+    })
+    const events: string[] = []
+    await expect(ensureRemoteInstance(session, profile, { ...BOOTSTRAP, healthPollAttempts: 1 }, {
+      onEvent: stage => events.push(stage),
+    })).rejects.toThrow(/did not become ready/)
+    expect(events).not.toContain('ready')
   })
 
   it('bootstraps a fresh machine end to end: probe → install → launch → ready', async () => {
@@ -1238,8 +1256,6 @@ describe('ensureRemoteInstance', () => {
       if (command.includes('tail'))
         return { code: 0, stdout: 'instance log line\n', stderr: '' }
       if (command.includes('/dev/null'))
-        // The legacy verdict probe: this remote has neither curl nor wget,
-        // so its else-arm prints the marker on stdout.
         return { code: 0, stdout: REMOTE_PROBE_NO_DOWNLOADER, stderr: '' }
       // The root/bundle probes fail (their else-arm exits 1) — not ready.
       return { code: 1, stdout: '', stderr: '' }

@@ -18,7 +18,7 @@ import { carryWorkspaceAllowlist } from '../utils/allowlist'
 import { syncBundledPlugins } from '../utils/plugins-sync'
 import { discoverableHosts, loadSshConfigBlocks, lookupSshConfig, resolveSshAuth } from '../utils/ssh-config'
 import { bootstrap } from './bootstrap'
-import { checkMissingCommand, credentialsCopyCommand, describeExecFailure, ensurePnpmCommand, firstLineOf, missingComponentsOf, planRemoteInstall, readEnvCredentials, remoteWebTokenCommand, safeProfileName, skippedVerificationSummary } from './bootstrap.utils'
+import { assertRemoteDshVersion, checkMissingCommand, credentialsCopyCommand, describeExecFailure, ensurePnpmCommand, firstLineOf, missingComponentsOf, planRemoteInstall, readEnvCredentials, remoteWebTokenCommand, safeProfileName, skippedVerificationSummary } from './bootstrap.utils'
 import { events } from './events'
 import { gateway } from './gateway'
 import { knownHosts } from './known-hosts'
@@ -816,6 +816,7 @@ async function performInstall(machineId: MachineId, profile: MachineProfile, sig
     onEvent('probe', `远端平台 ${plan.os}/${plan.arch}，安装源 ${plan.repo}${plan.dsh.kind === 'pkg-zip' ? ` tag ${plan.dsh.tag}` : ` npm ${plan.dsh.version}`}`)
     for (const note of plan.notes)
       onEvent('probe', note)
+    await assertRemoteDshVersion(session, true)
     const missing = missingComponentsOf((await session.exec(checkMissingCommand())).stdout)
     const skips: string[] = []
     if (missing.length > 0) {
@@ -845,6 +846,7 @@ async function performInstall(machineId: MachineId, profile: MachineProfile, sig
         `dsh install finished on "${profile.host}" but the entry ${dshExpr} is not present`,
       )
     }
+    await assertRemoteDshVersion(session)
     let credentialsCopied = false
     let credentialsError: string | undefined
     try {

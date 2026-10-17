@@ -35,6 +35,9 @@
     "cordis.patch.yml",
     "dist"
   ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1"
+  },
   "dsh": {
     "client": {
       "inject": [
@@ -68,6 +71,7 @@
     "h3": "catalog:",
     "pathe": "catalog:utils",
     "schemastery": "catalog:utils",
+    "semver": "catalog:runtime",
     "ssh2": "catalog:utils",
     "yaml": "catalog:testing"
   },
@@ -78,6 +82,7 @@
     "@types/qrcode": "catalog:types",
     "@types/react": "catalog:types",
     "@types/react-dom": "catalog:types",
+    "@types/semver": "catalog:types",
     "@types/ssh2": "catalog:types",
     "dsh-tauri-tsdown": "workspace:*",
     "jsdom": "catalog:testing",

@@ -14,9 +14,12 @@ import { machine } from './machine'
 import { sync } from './sync'
 import { buildPreview, classifySpec, installSpecOf, pluginAddCommand, skillExtractCommand } from './sync.utils'
 
+const ok = (stdout = ''): RemoteExecResult => ({ code: 0, stdout, stderr: '' })
+const fail = (stderr: string): RemoteExecResult => ({ code: 1, stdout: '', stderr })
+
 function fakeSession(respond: (command: string, options?: { stdinData?: Buffer }) => RemoteExecResult): RemoteSession & { execSpy: ReturnType<typeof vi.fn>, closed: () => boolean } {
   let open = true
-  const execSpy = vi.fn(async (command: string, options?: { stdinData?: Buffer }) => respond(command, options))
+  const execSpy = vi.fn(async (command: string, options?: { stdinData?: Buffer }) => command.includes('REMOTE_DSH_PACKAGE') ? ok('{"version":"0.2.1-rc.1"}') : respond(command, options))
   return {
     execSpy,
     exec: execSpy as unknown as RemoteSession['exec'],
@@ -28,9 +31,6 @@ function fakeSession(respond: (command: string, options?: { stdinData?: Buffer }
     closed: () => !open,
   }
 }
-
-const ok = (stdout = ''): RemoteExecResult => ({ code: 0, stdout, stderr: '' })
-const fail = (stderr: string): RemoteExecResult => ({ code: 1, stdout: '', stderr })
 
 describe('classifySpec', () => {
   it('accepts remotely installable specs', () => {

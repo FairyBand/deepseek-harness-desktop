@@ -4,7 +4,6 @@ import {
   isCollapsiblePaste,
   livePasteRefs,
   pasteChipTitle,
-  resolveInsertionSpan,
   stalePasteRefs,
 } from './paste-collapse.utils'
 
@@ -83,29 +82,3 @@ describe('stalePasteRefs', () => {
     expect(stalePasteRefs(stash, new Set(['a']), 60_000, 2000)).toEqual([])
   })
 })
-
-describe('resolveInsertionSpan', () => {
-  it('动作面提供 captureInsertion 时直接用它的快照', () => {
-    const span = { start: 4, end: 4, draftRev: 9 }
-
-    expect(resolveInsertionSpan({ captureInsertion: () => span }, sessionInput())).toBe(span)
-  })
-
-  it('动作面没有 captureInsertion（0.1.5-rc.x）时退回 caretSpan + state.draftRev，组成同形快照', () => {
-    const input = sessionInput({ caret: { start: 2, end: 5 }, draftRev: 12 })
-
-    expect(resolveInsertionSpan({}, input)).toEqual({ start: 2, end: 5, draftRev: 12 })
-  })
-
-  it('两条通路都缺席时返回 undefined，由调用方退回官方粘贴', () => {
-    expect(resolveInsertionSpan(undefined, sessionInput())).toBeUndefined()
-  })
-})
-
-function sessionInput(options: { caret?: { start: number, end: number }, draftRev?: number } = {}) {
-  return {
-    insertReference: () => true,
-    ...(options.caret === undefined ? {} : { caretSpan: () => options.caret! }),
-    state: { getSnapshot: () => ({ occurrences: [], ...options.draftRev === undefined ? {} : { draftRev: options.draftRev } }), subscribe: () => () => {} },
-  }
-}

@@ -337,14 +337,12 @@ describe('official kernel identity projection', () => {
     expect(() => identity.resolve(agentOf(session))).toThrow('BRIDGE_CORE_UNAVAILABLE')
   })
 
-  it('fails before any append when the actual alpha official module lacks the plugin record writer', async () => {
+  it.each(['appendPluginRecord', 'pluginRecordOf'] as const)('fails before any append when the host lacks %s', async (missing) => {
     await identity.register()
-    vi.mocked(loader.import).mockClear()
+    vi.mocked(loader.import).mockImplementation(async id => id === 'zod' ? zodModule : id === '@deepseek-ai/dsh-llm' ? llmModule : { ...sessionModule, [missing]: undefined })
     const session = Session.create(SessionId('session-a'))
     const append = vi.spyOn(session, 'append')
     const before = session.seq
-    expect(Reflect.get(sessionModule, 'appendPluginRecord')).toBeUndefined()
-    expect(Reflect.get(sessionModule, 'pluginRecordOf')).toBeUndefined()
     await expect(identity.append(agentOf(session), binding)).rejects.toThrow('BRIDGE_CORE_UNAVAILABLE')
     expect(session.seq).toBe(before)
     expect(append).not.toHaveBeenCalled()

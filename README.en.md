@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" alt="DSH 0.2.0-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="Recommended DSH 0.2.1-rc.1" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="MIT License" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Downloads" />
@@ -78,9 +78,9 @@ First-party plugins distributed with desktop resources:
 
 Setup offers the following community plugins for installation on demand.
 
-- [DSH Market](https://github.com/dsh-market/dsh-market) — Community plugin market
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — Per-session editor sidebar
 - [Billion Context](https://github.com/ranxianglei/billion-context) — Context compression and history restoration
+- [DSH Market](https://github.com/dsh-market/dsh-market) — Community plugin market
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — Conversation rewind and workspace backups
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM channels and bot management
 
@@ -135,8 +135,10 @@ Windows startup failures show a native dialog with the underlying error. For `ST
 
 | Current baseline | Version |
 | --- | --- |
-| Recommended Harness core | `0.2.0-rc.2` |
-| Declared minimum core | `0.1.5-rc.1`; not a compatibility guarantee for every plugin |
+| Recommended Harness core | `0.2.1-rc.1` |
+| Minimum supported core | `0.1.7-rc.1`; not a compatibility guarantee for every plugin |
+
+Older cores are no longer supported. Earlier compatibility records describe history, not the current support range.
 
 - Core and preset selection follow the [resource manifest](<./src-tauri/resources/manifest.jsonc>) and declared plugin version ranges, not a promise of compatibility with arbitrary latest upstream releases.
 - CLI integration is enabled by default in release: Windows / macOS / Linux update PATH automatically. Reopen your terminal; other shells may still need manual setup.

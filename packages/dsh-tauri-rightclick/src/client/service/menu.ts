@@ -173,12 +173,6 @@ export async function deleteWorkspace(input: {
   }
 }
 
-/**
- * Action：在指定工作区新建会话。
- *
- * legacy 投影在两个候选服务都没有 `startSession` 时把该属性读为 undefined（不是抛错），
- * 可选链调用就会静默什么都不做（issue #780），因此这里显式回报不可用。
- */
 export async function startWorkspaceSession(input: {
   workspaces: WorkspacesRuntimeLike
   workspaceId: WorkspaceId

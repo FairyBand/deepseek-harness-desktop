@@ -81,7 +81,8 @@ describe('浏览器编排：阻塞引导弹窗', () => {
       contentType: 'text/html',
       body: `<main data-slot="sidebar">ready</main><script>
         setTimeout(() => document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(ONBOARDING)}), 600)
-        setTimeout(() => document.body.dataset.lateModalWindow = 'elapsed', 1_300)
+        setTimeout(() => document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(ONBOARDING)}), 1_500)
+        setTimeout(() => document.body.dataset.lateModalWindow = 'elapsed', 2_000)
       </script>`,
     }))
 

@@ -699,52 +699,89 @@ mod tests {
     }
 
     #[test]
+    fn shipped_manifest_keeps_recommendation_and_minimum_in_sync() {
+        let manifest = shipped_manifest();
+        assert_eq!(manifest.engines.dsh.recommend, "0.2.1-rc.1");
+        assert_eq!(manifest.engines.dsh.minimum, "0.1.7-rc.1");
+        let raw = std::fs::read_to_string(source_manifest_path()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&strip_jsonc(&raw)).unwrap();
+        assert_eq!(
+            value["dependencies"]["dsh"]["engine"]["recommend"],
+            "0.2.1-rc.1"
+        );
+        assert_eq!(
+            value["dependencies"]["dsh"]["engine"]["minimum"],
+            "0.1.7-rc.1"
+        );
+        for (id, floor_req) in [
+            ("dsh-better-sidebar", "^0.21.1"),
+            ("dsh-rewind-plugin", "^0.14.0"),
+            ("@xmanrui/dsh-im", "^4.29.0"),
+        ] {
+            let entry = manifest
+                .plugins
+                .preset
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            let matrix = entry.version.as_ref().unwrap();
+            assert_eq!(
+                matrix.plugin_req_for_core(Some("0.1.7-rc.1")),
+                Some(floor_req),
+                "{id}"
+            );
+            assert_eq!(
+                matrix.plugin_req_for_core(Some("0.2.1-rc.1")),
+                Some("latest"),
+                "{id}"
+            );
+            for core in ["0.1.5-rc.1", "0.1.6", "0.1.7-alpha.1", "0.1.7-rc.0"] {
+                assert_eq!(matrix.plugin_req_for_core(Some(core)), None, "{id} {core}");
+                assert!(matrix.unsupported_on(Some(core)), "{id} {core}");
+            }
+        }
+    }
+
+    #[test]
     fn plugin_version_matrix_matches_core_ranges() {
         let matrix = PluginVersion::Matrix(vec![
-            VersionPair {
-                version: "^0.19.1".to_string(),
-                dsh: "^0.1.5-rc.1".to_string(),
-            },
             VersionPair {
                 version: "^0.21.1".to_string(),
                 dsh: "^0.1.7-rc.1".to_string(),
             },
+            VersionPair {
+                version: "^0.22.1".to_string(),
+                dsh: "^0.1.7-rc.5".to_string(),
+            },
         ]);
         assert_eq!(
-            matrix.plugin_req_for_core(Some("0.1.5-rc.3")),
-            Some("^0.19.1")
+            matrix.plugin_req_for_core(Some("0.1.7-rc.1")),
+            Some("^0.21.1")
         );
         assert_eq!(
             matrix.plugin_req_for_core(Some("0.1.7-rc.2")),
             Some("^0.21.1")
         );
-        // release 核心同时落在两条区间内：必须取最新一代规则，否则会把新插件按旧一代钉版本
-        assert_eq!(matrix.plugin_req_for_core(Some("0.1.8")), Some("^0.21.1"));
-        assert_eq!(matrix.plugin_req_for_core(Some("0.2.0")), None);
-        assert!(!matrix.unsupported_on(Some("0.1.5-rc.3")));
+        assert_eq!(
+            matrix.plugin_req_for_core(Some("0.1.7-rc.5")),
+            Some("^0.22.1")
+        );
+        assert_eq!(matrix.plugin_req_for_core(Some("0.1.8")), Some("^0.22.1"));
+        assert_eq!(matrix.plugin_req_for_core(Some("0.2.1-rc.1")), None);
+        assert!(!matrix.unsupported_on(Some("0.1.7-rc.1")));
         assert!(!matrix.unsupported_on(Some("0.1.8")));
         assert!(!matrix.unsupported_on(None));
         assert!(!matrix.unsupported_on(Some("not-a-version")));
-        assert!(matrix.unsupported_on(Some("0.2.0")));
-        assert!(matrix.matches_any_declared(Some("0.19.5")));
+        assert!(matrix.unsupported_on(Some("0.2.1-rc.1")));
         assert!(matrix.matches_any_declared(Some("0.21.3")));
+        assert!(matrix.matches_any_declared(Some("0.22.3")));
         assert!(!matrix.matches_any_declared(Some("0.25.0")));
         assert!(!matrix.matches_any_declared(None));
     }
 
-    /// 回归：预发布核心按**数值区间**判定，与内核安装校验
-    /// （`semver.satisfies(runtime, req, { includePrerelease: true })`）一致。
-    ///
-    /// `^0.2.0-rc.1` 覆盖整个 0.2.x，包括 `0.2.1-rc.1` 这类更高补丁号的预发布核心；
-    /// 旧实现按 `semver` crate 的预发布门槛判定，会把刚发的 rc 判成「不兼容当前核心」，
-    /// 并把已装插件退役。
     #[test]
     fn prerelease_core_is_judged_by_numeric_range() {
         let matrix = PluginVersion::Matrix(vec![
-            VersionPair {
-                version: "^0.19.1".to_string(),
-                dsh: "^0.1.5-rc.1".to_string(),
-            },
             VersionPair {
                 version: "^0.21.1".to_string(),
                 dsh: "^0.1.7-rc.1".to_string(),
@@ -755,14 +792,14 @@ mod tests {
             },
         ]);
         for (core, expected) in [
+            ("0.1.7-rc.1", Some("^0.21.1")),
+            ("0.1.7-rc.3", Some("^0.21.1")),
+            ("0.1.8", Some("^0.21.1")),
             ("0.2.0-rc.1", Some("^0.24.1")),
             ("0.2.0-rc.2", Some("^0.24.1")),
             ("0.2.0", Some("^0.24.1")),
             ("0.2.1-rc.1", Some("^0.24.1")),
             ("0.2.9-beta.3", Some("^0.24.1")),
-            ("0.1.5-rc.3", Some("^0.19.1")),
-            ("0.1.6-rc.1", Some("^0.19.1")),
-            ("0.1.7-rc.3", Some("^0.21.1")),
         ] {
             assert_eq!(
                 matrix.plugin_req_for_core(Some(core)),
@@ -771,46 +808,43 @@ mod tests {
             );
             assert!(!matrix.unsupported_on(Some(core)), "core={core}");
         }
-        // 低于下界 / 跨代边界仍判不兼容：门槛放宽不能把真正的越界版本放进来
-        for core in ["0.1.5-alpha.2", "0.2.0-alpha.1", "0.3.0-rc.1", "0.3.0"] {
+        for core in [
+            "0.1.6-rc.1",
+            "0.1.7-alpha.1",
+            "0.1.7-beta.9",
+            "0.1.7-rc.0",
+            "0.2.0-alpha.1",
+            "0.3.0-rc.1",
+            "0.3.0",
+        ] {
             assert_eq!(matrix.plugin_req_for_core(Some(core)), None, "core={core}");
             assert!(matrix.unsupported_on(Some(core)), "core={core}");
         }
     }
 
-    /// 回归 issue：已装版本**新于**声明区间时不算过期。
-    ///
-    /// 清单声明 `^0.21.1`（核心 `^0.1.7-rc.1`）时，用户手动升级到 0.22.0 必须被保留：
-    /// `^0.21.1` 不匹配 0.22.0，若按「不匹配即过期」判定会在启动时把用户装好的新版本
-    /// 自动卸载，用户永远无法升级插件。
     #[test]
     fn newer_installed_version_is_not_outdated() {
         let matrix = PluginVersion::Matrix(vec![
             VersionPair {
-                version: "^0.19.1".to_string(),
-                dsh: "^0.1.5-rc.1".to_string(),
-            },
-            VersionPair {
                 version: "^0.21.1".to_string(),
                 dsh: "^0.1.7-rc.1".to_string(),
             },
+            VersionPair {
+                version: "^0.24.1".to_string(),
+                dsh: "^0.2.0-rc.1".to_string(),
+            },
         ]);
         for (core, installed, outdated) in [
-            // 命中区间上界内：不过期
             (Some("0.1.7-rc.1"), Some("0.21.1"), Some(false)),
             (Some("0.1.7-rc.1"), Some("0.21.3"), Some(false)),
-            // 高于区间上界（用户自升级）：不过期
             (Some("0.1.7-rc.1"), Some("0.22.0"), Some(false)),
             (Some("0.1.7-rc.1"), Some("1.0.0"), Some(false)),
-            // 低于区间下界（上一代遗留）：过期，需按当前代重装
             (Some("0.1.7-rc.1"), Some("0.19.1"), Some(true)),
             (Some("0.1.7-rc.1"), Some("0.20.9"), Some(true)),
-            // 上一代核心：按其下界判定
-            (Some("0.1.5-rc.3"), Some("0.18.0"), Some(true)),
-            (Some("0.1.5-rc.3"), Some("0.19.1"), Some(false)),
-            (Some("0.1.5-rc.3"), Some("0.25.0"), Some(false)),
-            // 核心无命中代 / 已装版本不可解析：无法判定
-            (Some("0.2.0"), Some("0.19.1"), None),
+            (Some("0.2.1-rc.1"), Some("0.21.3"), Some(true)),
+            (Some("0.2.1-rc.1"), Some("0.24.1"), Some(false)),
+            (Some("0.2.1-rc.1"), Some("0.25.0"), Some(false)),
+            (Some("0.3.0"), Some("0.19.1"), None),
             (Some("0.1.7-rc.1"), None, None),
             (Some("0.1.7-rc.1"), Some("invalid"), None),
             (None, Some("0.19.1"), None),

@@ -285,19 +285,20 @@ describe('ungroupedNewSessionFeature', () => {
     dispose()
   })
 
-  it('≤0.1.6：没有 data-row-key 时退化按「未分组」文案命中', () => {
+  it('没有 data-row-key 时不根据中英文文案接管按钮', () => {
     const dispose = ungroupedNewSessionFeature.call(ctx)
     const controller = mocks.controller as ControllerStub
-
-    controller.click(clickEvent(plusIn(null, '在“未分组”中新建会话')))
-    expect(mocks.startUngroupedSession).toHaveBeenCalledTimes(1)
-
-    controller.click(clickEvent(plusIn(null, 'New session in Ungrouped')))
-    expect(mocks.startUngroupedSession).toHaveBeenCalledTimes(2)
+    const chinese = clickEvent(plusIn(null, '在“未分组”中新建会话'))
+    const english = clickEvent(plusIn(null, 'New session in Ungrouped'))
+    controller.click(chinese)
+    controller.click(english)
+    expect(mocks.startUngroupedSession).not.toHaveBeenCalled()
+    expect(chinese.preventDefault).not.toHaveBeenCalled()
+    expect(english.preventDefault).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('≤0.1.6：真实工作区的「+」与侧边栏「新建会话」都不命中', () => {
+  it('真实工作区的「+」与侧边栏「新建会话」都不命中', () => {
     const dispose = ungroupedNewSessionFeature.call(ctx)
     const controller = mocks.controller as ControllerStub
 

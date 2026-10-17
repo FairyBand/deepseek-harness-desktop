@@ -15,7 +15,6 @@ import { store } from '@/store'
 import { HARNESS_HEAP_MAX_MB, HARNESS_HEAP_MIN_MB } from '@/store/modules/setting'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
-import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
 import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { writeClipboardText } from '@/utils/clipboard'
 import { toast } from '@/utils/toast'
@@ -46,7 +45,6 @@ export function ConfigDebug() {
   const { t, i18n } = useTranslation()
   const { serviceRunning, busyAction } = useStore(store.harness)
   const { updateInfo } = useStore(store.harnessUpdater)
-  const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
   const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // 端口编辑态：用户尚未输入时为 undefined，展示值始终以 store 中已保存的端口为准。
@@ -77,18 +75,13 @@ export function ConfigDebug() {
     queryFn: () => invoke<CliLinkStatus>('get_cli_link_status'),
   })
 
-  /** 「存在新版本」：直接展示更新提示；破坏性更改确认推迟到点击「立即更新」时 */
   function handleShowNewVersion() {
     store.harnessUpdater.showToast(() => handleUpdate())
   }
 
-  /**
-   * 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新；
-   * 目标版本是升级时先落到配套版本档案，更新失败再把档案切回去。
-   */
   async function handleUpdate() {
     const info = store.harnessUpdater.updateInfo
-    if (!info || !(await confirmCoreBreaking(info.tag)))
+    if (!info)
       return
     const guard = await guardCoreUpgrade(info.tag)
     if (!guard)
@@ -263,7 +256,6 @@ export function ConfigDebug() {
           </Button>
         )}
       />
-      {coreBreakingHolder}
       {coreProfileSwitchHolder}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">

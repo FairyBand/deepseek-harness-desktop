@@ -10,7 +10,6 @@ import { queryKeys } from '@/config/query-keys'
 import { useListen } from '@/hooks/use-listen'
 import { useThemeAdaptive } from '@/hooks/use-theme-adaptive'
 import { useWakelockRelease } from '@/hooks/use-wakelock-release'
-import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
 import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { toast } from '@/utils/toast'
 import { store } from '../store'
@@ -41,7 +40,6 @@ export function App() {
   const { t } = useTranslation()
   const { status } = useStore(store.harness)
   const { updateInfo, updating } = useStore(store.harnessUpdater)
-  const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
   const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // issue #469：本应用没有屏幕常亮的正当需求（常驻播放的 <video> 会让系统无法息屏），
@@ -127,20 +125,15 @@ export function App() {
     })
   })
 
-  // 新版本提示：仅提示不打断用户；破坏性更改确认推迟到点击「立即更新」时
   useWatch([updateInfo, updating], () => {
     if (!updateInfo || updating)
       return
     store.harnessUpdater.showToast(() => handleUpdate())
   }, { immediate: true })
 
-  /**
-   * 点击「立即更新」：目标版本高于 rc.2 时先弹破坏性更改确认，取消则中止更新；
-   * 目标版本是升级时先落到配套版本档案，更新失败再把档案切回去。
-   */
   async function handleUpdate() {
     const info = store.harnessUpdater.updateInfo
-    if (!info || !(await confirmCoreBreaking(info.tag)))
+    if (!info)
       return
     const guard = await guardCoreUpgrade(info.tag)
     if (!guard)
@@ -152,9 +145,6 @@ export function App() {
   return (
     <div className="flex h-screen w-screen" data-testid="dsh-shell-root">
       <Webview />
-      <If cond={status === 'ready'}>
-        {coreBreakingHolder}
-      </If>
       <If cond={status === 'ready'}>
         {coreProfileSwitchHolder}
       </If>

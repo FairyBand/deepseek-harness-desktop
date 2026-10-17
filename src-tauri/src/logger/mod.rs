@@ -33,6 +33,11 @@ static FRONTDESK_WRITER: OnceLock<Arc<Mutex<SizeRotatingWriter>>> = OnceLock::ne
 /// 仅用 `std::env` 解析，不依赖 `AppHandle`，因此也是启动前读取 store 的路径来源
 /// （`config::force_xwayland_setting`）。
 pub(crate) fn identifier_dir() -> Option<PathBuf> {
+    match crate::config::e2e_app_data_dir() {
+        Ok(Some(directory)) => return Some(directory),
+        Err(_) => return None,
+        Ok(None) => {}
+    }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").ok()?;

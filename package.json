@@ -156,7 +156,6 @@
     "changelogithub": "catalog:release",
     "diff": "catalog:testing",
     "dsh-h3": "catalog:",
-    "dsh-session-current": "catalog:testing",
     "eslint": "catalog:lint",
     "eslint-plugin-react-refresh": "catalog:lint",
     "h3": "catalog:",

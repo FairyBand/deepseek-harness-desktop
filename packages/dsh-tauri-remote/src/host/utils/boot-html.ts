@@ -1,6 +1,6 @@
 const BOOT_MARKER = /globalThis\[(['"])__DSH_BOOT__\1\]\s*=\s*/u
 
-export function clientUrlsFromBootHtml(port: number, html: string): string[] | undefined {
+function bootFromHtml(html: string): Record<string, unknown> | undefined {
   const marker = BOOT_MARKER.exec(html)
   if (marker === null)
     return undefined
@@ -16,7 +16,19 @@ export function clientUrlsFromBootHtml(port: number, html: string): string[] | u
   catch {
     return undefined
   }
-  const entries = (boot as { entries?: unknown }).entries
+  return typeof boot === 'object' && boot !== null && !Array.isArray(boot) ? boot as Record<string, unknown> : undefined
+}
+
+export function releaseVersionFromBootHtml(html: string): string | undefined {
+  const boot = bootFromHtml(html)
+  if (boot === undefined || !('release' in boot))
+    return undefined
+  const release = boot.release
+  return typeof release === 'object' && release !== null && 'version' in release && typeof release.version === 'string' ? release.version : ''
+}
+
+export function clientUrlsFromBootHtml(port: number, html: string): string[] | undefined {
+  const entries = bootFromHtml(html)?.entries
   if (!Array.isArray(entries))
     return undefined
   const paths: string[] = []

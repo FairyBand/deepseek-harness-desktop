@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" alt="DSH 0.2.0-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="DSH recomendado 0.2.1-rc.1" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="MIT License" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Downloads" />
@@ -78,9 +78,9 @@ Plugins propios distribuidos con los recursos del escritorio:
 
 El asistente ofrece los siguientes plugins comunitarios para instalar a demanda.
 
-- [DSH Market](https://github.com/dsh-market/dsh-market) — Mercado de plugins comunitarios
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — Barra lateral del editor por sesión
 - [Billion Context](https://github.com/ranxianglei/billion-context) — Compresión de contexto y restauración del historial
+- [DSH Market](https://github.com/dsh-market/dsh-market) — Mercado de plugins comunitarios
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — Retroceso de conversación y backups del workspace
 - [DSH IM](https://github.com/xmanrui/dsh-im) — Canales IM y gestión de bots
 
@@ -135,8 +135,10 @@ Windows muestra los errores de inicio en un diálogo nativo. Para `STARTUP_LOW_I
 
 | Base actual | Versión |
 | --- | --- |
-| Núcleo Harness recomendado | `0.2.0-rc.2` |
-| Núcleo mínimo declarado | `0.1.5-rc.1`; no garantiza compatibilidad con todos los plugins |
+| Núcleo Harness recomendado | `0.2.1-rc.1` |
+| Núcleo mínimo compatible | `0.1.7-rc.1`; no garantiza compatibilidad con todos los plugins |
+
+Los núcleos anteriores ya no son compatibles. Los registros previos describen hechos históricos, no el soporte actual.
 
 - La selección del núcleo y los preajustes sigue el [manifiesto de recursos](<./src-tauri/resources/manifest.jsonc>) y los rangos declarados por los plugins; no garantiza compatibilidad con cualquier nueva versión oficial.
 - La integración CLI está habilitada por defecto en release: Windows / macOS / Linux actualizan el PATH automáticamente. Reabrí la terminal; otros shells pueden seguir necesitando configuración manual.

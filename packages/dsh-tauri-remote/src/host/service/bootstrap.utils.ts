@@ -6,9 +6,9 @@ import { readFileSync } from 'node:fs'
 import { messageOf } from '../../shared/error'
 import { DEFAULT_REMOTE_PROFILE, REMOTE_ROOT } from '../config/constants'
 import { assetMatrixFor, dshNpmTarballUrls, dshZipDownloadUrls, NODE_SHASUMS256_SHA256, NODE_VERSION, nodeDownloadUrls, nodeShasumUrls, parsePlatform, PNPM_SHA256, PNPM_VERSION, pnpmDownloadUrls } from '../utils/assets'
-import { clientUrlsFromBootHtml, looksLikePluginBundle } from '../utils/boot-html'
+import { clientUrlsFromBootHtml, looksLikePluginBundle, releaseVersionFromBootHtml } from '../utils/boot-html'
 import { shQuote } from '../utils/shell'
-import { listGithubAssets, listGithubReleases, npmDistMetadata, parseGitHubRepo, pickReleaseTag, pkgRepoOf } from '../utils/version'
+import { assertSupportedDshVersion, listGithubAssets, listGithubReleases, npmDistMetadata, parseGitHubRepo, parseVersionFromTag, pickReleaseTag, pkgRepoOf } from '../utils/version'
 
 export const REMOTE_WEB_LOG = '.dsh/dsh-remote-web.log'
 
@@ -89,6 +89,9 @@ export async function planRemoteInstall(
   } = {},
 ): Promise<RemoteInstallPlan> {
   const { os, arch } = parsePlatform(unameOut)
+  const ref = config.installRef?.trim()
+  if (ref !== undefined && ref !== '')
+    assertSupportedDshVersion(ref.startsWith('dsh-') ? parseVersionFromTag(ref) ?? '' : ref)
   const matrix = assetMatrixFor(os, arch)
   const repo = pkgRepoOf(config.installRepo)
   const notes: string[] = []
@@ -106,6 +109,7 @@ export async function planRemoteInstall(
     notes.push(`release 列表获取失败（${messageOf(error)}）`)
   }
   const resolved = pickReleaseTag(metas, { ref: config.installRef })
+  assertSupportedDshVersion(resolved.version)
   notes.push(...resolved.notes.map(note => `版本选择: ${note}`))
   const node = {
     urls: nodeDownloadUrls(os, arch),
@@ -181,6 +185,8 @@ function quoteUrls(urls: string[]): string {
 }
 
 export function buildInstallScript(plan: RemoteInstallPlan): string {
+  assertSupportedDshVersion(plan.dshVersion)
+  assertSupportedDshVersion(plan.dsh.kind === 'pkg-zip' ? parseVersionFromTag(plan.dsh.tag) ?? '' : plan.dsh.version)
   const dshSection = plan.dsh.kind === 'pkg-zip'
     ? [
         `if [ -f "$ROOT/dependencies/dsh/${DSH_ZIP_ENTRY}" ]; then`,
@@ -365,6 +371,28 @@ export function checkMissingCommand(): string {
   ].join('\n')
 }
 
+export async function assertRemoteDshVersion(session: RemoteSession, allowMissing = false): Promise<void> {
+  const result = await session.exec([
+    `ROOT="$HOME/${REMOTE_ROOT}"`,
+    `if [ -f "$ROOT/dependencies/dsh/${DSH_ZIP_ENTRY}" ]; then REMOTE_DSH_PACKAGE="$ROOT/dependencies/dsh/node_modules/@deepseek-ai/dsh/package.json"`,
+    `elif [ -f "$ROOT/dependencies/dsh/${DSH_NPM_ENTRY}" ]; then REMOTE_DSH_PACKAGE="$ROOT/dependencies/dsh/package.json"`,
+    'else echo REMOTE_DSH_MISSING; exit 0; fi',
+    'cat "$REMOTE_DSH_PACKAGE"',
+  ].join('\n'))
+  if (allowMissing && result.code === 0 && result.stdout.trim() === 'REMOTE_DSH_MISSING')
+    return
+  let version = ''
+  if (result.code === 0) {
+    try {
+      const pkg: unknown = JSON.parse(result.stdout)
+      if (typeof pkg === 'object' && pkg !== null && 'version' in pkg && typeof pkg.version === 'string')
+        version = pkg.version
+    }
+    catch {}
+  }
+  assertSupportedDshVersion(version)
+}
+
 export function missingComponentsOf(stdout: string): string[] {
   return stdout.split('\n').map(line => line.trim()).filter(line => line !== '' && ['node', 'dsh', 'pnpm'].includes(line))
 }
@@ -405,6 +433,8 @@ export function safeProfileName(raw: string | undefined): string {
 }
 
 export function startCommandFor(profile: MachineProfile, plan?: RemoteInstallPlan): string {
+  if (plan !== undefined)
+    assertSupportedDshVersion(plan.dshVersion)
   if (profile.startCommand !== undefined)
     return `mkdir -p "$HOME/.dsh" && ( ${profile.startCommand} >>"$HOME/${REMOTE_WEB_LOG}" 2>&1 < /dev/null & ) &`
   const node = `$HOME/${REMOTE_ROOT}/runtime/bin/node`
@@ -522,6 +552,81 @@ export function describeExecFailure(code: number | null, stderr: string): string
   return `exit ${code ?? '?'}${tail === '' ? '' : `: ${tail}`}`
 }
 
+function listenerSnapshotCommand(port: number): string {
+  return [
+    'fail() { echo "REMOTE_DSH_LISTENER_$1" >&2; exit 1; }',
+    'OS=$(uname -s) || fail PLATFORM',
+    'case "$OS" in Linux|Darwin) ;; *) fail PLATFORM ;; esac',
+    `if command -v lsof >/dev/null 2>&1; then PIDS=$(lsof -a -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null | sort -u)`,
+    `elif [ "$OS" = Linux ] && command -v ss >/dev/null 2>&1; then PIDS=$(ss -H -lntp 'sport = :${port}' 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)`,
+    'else fail TOOLS_MISSING; fi',
+    'set -f; set -- $PIDS; [ "$#" -eq 1 ] || fail PID_MISSING_OR_MULTIPLE',
+    'REMOTE_DSH_LISTENER_PID=$1',
+    'case "$REMOTE_DSH_LISTENER_PID" in ""|*[!0-9]*) fail PID_INVALID ;; esac',
+    'if [ "$OS" = Linux ]; then',
+    '  CWD=$(readlink "/proc/$REMOTE_DSH_LISTENER_PID/cwd") || fail CWD_UNREADABLE',
+    '  STAMP=$(stat -Lc "%d:%i" "/proc/$REMOTE_DSH_LISTENER_PID") || fail PROCESS_UNREADABLE',
+    '  [ -r "/proc/$REMOTE_DSH_LISTENER_PID/cmdline" ] || fail COMMAND_UNREADABLE',
+    '  printf "%s\\n" "$OS" "$REMOTE_DSH_LISTENER_PID" "$CWD" "$STAMP"',
+    '  cat "/proc/$REMOTE_DSH_LISTENER_PID/cmdline" || fail COMMAND_UNREADABLE',
+    'else',
+    '  CWD=$(lsof -a -p "$REMOTE_DSH_LISTENER_PID" -d cwd -Fn 2>/dev/null | sed -n "s/^n//p") || fail CWD_UNREADABLE',
+    '  STAMP=$(ps -p "$REMOTE_DSH_LISTENER_PID" -o lstart=) || fail PROCESS_UNREADABLE',
+    '  ARGS=$(ps -ww -p "$REMOTE_DSH_LISTENER_PID" -o command=) || fail COMMAND_UNREADABLE',
+    '  printf "%s\\n" "$OS" "$REMOTE_DSH_LISTENER_PID" "$CWD" "$STAMP" "$ARGS"',
+    'fi',
+  ].join('\n')
+}
+
+async function assertListenerDshVersion(session: RemoteSession, port: number): Promise<void> {
+  const unverifiable = (reason: string): never => {
+    throw new Error(`REMOTE_DSH_VERSION_UNVERIFIABLE: 无法确认端口 ${port} 的 DSH 版本（${reason}）；需要可识别的 Node DSH 入口及只读进程权限`)
+  }
+  const command = listenerSnapshotCommand(port)
+  const snapshot = await session.exec(command)
+  if (snapshot.code !== 0)
+    return unverifiable(snapshot.stderr.trim() || 'listener identity unavailable')
+  const [os, pid, cwd, stamp, ...rest] = snapshot.stdout.split('\n')
+  if (!['Linux', 'Darwin'].includes(os ?? '') || !/^\d+$/u.test(pid ?? '') || !cwd?.startsWith('/') || !stamp?.trim())
+    return unverifiable('invalid listener identity')
+  const argv = os === 'Linux' ? rest.join('\n').split('\0') : rest.join('\n').trim().split(/\s+/u)
+  const entry = argv[1]
+  if (!/(?:^|\/)node(?:js)?$/u.test(argv[0] ?? '') || entry === undefined || entry === '' || entry.startsWith('-'))
+    return unverifiable('unknown DSH command entry')
+  const metadata = await session.exec([
+    `cd ${shQuote(cwd)} || exit 1`,
+    `REMOTE_DSH_LISTENER_ENTRY=${shQuote(entry)}`,
+    'case "$REMOTE_DSH_LISTENER_ENTRY" in /*) ;; *) REMOTE_DSH_LISTENER_ENTRY="$PWD/$REMOTE_DSH_LISTENER_ENTRY" ;; esac',
+    'COUNT=0',
+    'while [ -L "$REMOTE_DSH_LISTENER_ENTRY" ]; do',
+    '  [ "$COUNT" -lt 16 ] || exit 1; COUNT=$((COUNT + 1))',
+    '  LINK=$(readlink "$REMOTE_DSH_LISTENER_ENTRY") || exit 1',
+    '  case "$LINK" in /*) REMOTE_DSH_LISTENER_ENTRY=$LINK ;; *) REMOTE_DSH_LISTENER_ENTRY="$(dirname "$REMOTE_DSH_LISTENER_ENTRY")/$LINK" ;; esac',
+    'done',
+    '[ -f "$REMOTE_DSH_LISTENER_ENTRY" ] || exit 1',
+    'DIR=$(CDPATH= cd -P "$(dirname "$REMOTE_DSH_LISTENER_ENTRY")" && pwd) || exit 1',
+    'REMOTE_DSH_LISTENER_ENTRY="$DIR/$(basename "$REMOTE_DSH_LISTENER_ENTRY")"',
+    'case "$REMOTE_DSH_LISTENER_ENTRY" in */lib/bin.js) ;; *) exit 1 ;; esac',
+    `REMOTE_DSH_LISTENER_PACKAGE="\${REMOTE_DSH_LISTENER_ENTRY%/lib/bin.js}/package.json"`,
+    'cat "$REMOTE_DSH_LISTENER_PACKAGE"',
+  ].join('\n'))
+  if (metadata.code !== 0)
+    return unverifiable('listener package unreadable')
+  let pkg: unknown
+  try {
+    pkg = JSON.parse(metadata.stdout)
+  }
+  catch {
+    return unverifiable('invalid listener package')
+  }
+  if (typeof pkg !== 'object' || pkg === null || !('name' in pkg) || pkg.name !== '@deepseek-ai/dsh' || !('version' in pkg) || typeof pkg.version !== 'string')
+    return unverifiable('listener is not an identifiable DSH package')
+  assertSupportedDshVersion(pkg.version)
+  const confirmed = await session.exec(command)
+  if (confirmed.code !== 0 || confirmed.stdout !== snapshot.stdout)
+    unverifiable('listener changed during version check')
+}
+
 export async function ensureRemoteInstance(
   session: RemoteSession,
   profile: MachineProfile,
@@ -530,36 +635,55 @@ export async function ensureRemoteInstance(
 ): Promise<string> {
   const { onEvent, onProgress } = hooks
   const target = `${profile.host}:${profile.remotePort}`
-  const readyFromHtml = await judgeReadiness(session, profile, config)
-  if (readyFromHtml !== undefined) {
-    emitReady(onEvent, target, readyFromHtml)
-    return target
-  }
-  onEvent?.('probe', '探测远端平台 (uname -srm)')
-  const uname = await session.exec('uname -srm')
-  if (uname.code !== 0) {
-    return failBootstrap(onEvent, `无法探测远端平台: ${describeExecFailure(uname.code, uname.stderr)}`)
-  }
-  let plan: RemoteInstallPlan
   try {
-    plan = await planRemoteInstall(uname.stdout, config)
+    const readyFromHtml = await judgeReadiness(session, profile, config)
+    if (readyFromHtml !== undefined) {
+      emitReady(onEvent, target, readyFromHtml)
+      return target
+    }
   }
   catch (error) {
     return failBootstrap(onEvent, messageOf(error))
   }
-  onEvent?.('probe', `远端平台 ${plan.os}/${plan.arch}，安装源 ${plan.repo}${plan.dsh.kind === 'pkg-zip' ? ` tag ${plan.dsh.tag}` : ` npm ${plan.dsh.version}`}`)
-  for (const note of plan.notes)
-    onEvent?.('probe', note)
-  const missing = missingComponentsOf((await session.exec(checkMissingCommand())).stdout)
-  let skips: string[] = []
-  if (missing.length > 0) {
-    onEvent?.('probe', `缺失组件: ${missing.join(', ')}`)
-    skips = await runInstallScript(session, plan, config.installTimeoutMs!, hooks)
+  let plan: RemoteInstallPlan | undefined
+  let skipSummary = ''
+  if (profile.startCommand === undefined) {
+    try {
+      await assertRemoteDshVersion(session, true)
+    }
+    catch (error) {
+      return failBootstrap(onEvent, messageOf(error))
+    }
+    onEvent?.('probe', '探测远端平台 (uname -srm)')
+    const uname = await session.exec('uname -srm')
+    if (uname.code !== 0)
+      return failBootstrap(onEvent, `无法探测远端平台: ${describeExecFailure(uname.code, uname.stderr)}`)
+    try {
+      plan = await planRemoteInstall(uname.stdout, config)
+    }
+    catch (error) {
+      return failBootstrap(onEvent, messageOf(error))
+    }
+    onEvent?.('probe', `远端平台 ${plan.os}/${plan.arch}，安装源 ${plan.repo}${plan.dsh.kind === 'pkg-zip' ? ` tag ${plan.dsh.tag}` : ` npm ${plan.dsh.version}`}`)
+    for (const note of plan.notes)
+      onEvent?.('probe', note)
+    const missing = missingComponentsOf((await session.exec(checkMissingCommand())).stdout)
+    let skips: string[] = []
+    if (missing.length > 0) {
+      onEvent?.('probe', `缺失组件: ${missing.join(', ')}`)
+      skips = await runInstallScript(session, plan, config.installTimeoutMs!, hooks)
+    }
+    else {
+      onEvent?.('probe', '三件套已就绪，跳过安装')
+    }
+    try {
+      await assertRemoteDshVersion(session)
+    }
+    catch (error) {
+      return failBootstrap(onEvent, messageOf(error))
+    }
+    skipSummary = skippedVerificationSummary(plan.notes, skips)
   }
-  else {
-    onEvent?.('probe', '三件套已就绪，跳过安装')
-  }
-  const skipSummary = skippedVerificationSummary(plan.notes, skips)
   onProgress?.({ phase: 'starting' })
   onEvent?.('launch', `拉起远端实例 (端口 ${profile.remotePort})`)
   const started = await session.exec(startCommandFor(profile, plan))
@@ -572,7 +696,13 @@ export async function ensureRemoteInstance(
   for (let attempt = 0; attempt < config.healthPollAttempts; attempt++) {
     onProgress?.({ phase: 'probing', attempt: attempt + 1, total: config.healthPollAttempts })
     await sleep(config.healthPollIntervalMs)
-    const verdict = await judgeReadiness(session, profile, config)
+    let verdict: string | undefined
+    try {
+      verdict = await judgeReadiness(session, profile, config)
+    }
+    catch (error) {
+      return failBootstrap(onEvent, messageOf(error))
+    }
     if (verdict !== undefined) {
       emitReady(onEvent, target, verdict, skipSummary)
       return target
@@ -582,7 +712,7 @@ export async function ensureRemoteInstance(
   return failBootstrap(
     onEvent,
     `remote dsh web did not become ready on "${target}" within ${config.healthPollAttempts} polls; `
-    + `fallback probe: root ${await legacyRootVerdict(session, profile, config)}; `
+    + `fallback probe: root ${await rootResponseVerdict(session, profile, config)}; `
     + `remote log tail: ${tail}`,
   )
 }
@@ -591,10 +721,19 @@ async function judgeReadiness(session: RemoteSession, profile: MachineProfile, c
   const root = await session.exec(rootProbeCommand(profile.remotePort, config.healthCheckTimeoutMs))
   if (root.code !== 0)
     return undefined
+  const release = releaseVersionFromBootHtml(root.stdout)
+  if (release !== undefined)
+    assertSupportedDshVersion(release)
   const urls = clientUrlsFromBootHtml(profile.remotePort, root.stdout)
   if (urls === undefined) {
-    return await legacyRootVerdict(session, profile, config)
+    const status = await session.exec(rootStatusProbeCommand(profile.remotePort, config.healthCheckTimeoutMs))
+    if (status.code !== 0 || status.stdout.trim() !== '401')
+      return undefined
+    await assertListenerDshVersion(session, profile.remotePort)
+    return 'auth required (HTTP 401)'
   }
+  if (release === undefined)
+    await assertListenerDshVersion(session, profile.remotePort)
   const first = urls[0]
   if (first === undefined)
     return undefined
@@ -605,17 +744,17 @@ async function judgeReadiness(session: RemoteSession, profile: MachineProfile, c
   return undefined
 }
 
-export function legacyProbeCommand(remotePort: number, timeoutMs: number): string {
+export function rootStatusProbeCommand(remotePort: number, timeoutMs: number): string {
   const seconds = Math.max(1, Math.ceil(timeoutMs / 1000))
   return [
     `if [ -n "$(command -v curl)" ]; then curl -s -o /dev/null -m ${seconds} -w '%{http_code}' http://127.0.0.1:${remotePort}/`,
-    `elif [ -n "$(command -v wget)" ]; then wget -q -T ${seconds} -O /dev/null http://127.0.0.1:${remotePort}/; case $? in 0) echo 200 ;; 6|8) echo 4xx/5xx ;; *) exit 1 ;; esac`,
+    `elif [ -n "$(command -v wget)" ]; then wget -S -T ${seconds} -O /dev/null http://127.0.0.1:${remotePort}/ 2>&1 | { status=; while read -r protocol code rest; do case "$protocol" in HTTP/*) status=$code ;; esac; done; [ -n "$status" ] && printf '%s\\n' "$status"; }`,
     `else echo ${REMOTE_PROBE_NO_DOWNLOADER}; fi`,
   ].join('; ')
 }
 
-async function legacyRootVerdict(session: RemoteSession, profile: MachineProfile, config: Config): Promise<string> {
-  const probe = await session.exec(legacyProbeCommand(profile.remotePort, config.healthCheckTimeoutMs))
+async function rootResponseVerdict(session: RemoteSession, profile: MachineProfile, config: Config): Promise<string> {
+  const probe = await session.exec(rootStatusProbeCommand(profile.remotePort, config.healthCheckTimeoutMs))
   if (probe.stdout.includes(REMOTE_PROBE_NO_DOWNLOADER))
     return `no downloader (${REMOTE_PROBE_NO_DOWNLOADER}: 远端缺少 curl 与 wget，无法探测就绪状态)`
   return probe.code === 0 ? `root answered ${probe.stdout.trim() || '?'}` : 'no answer'
@@ -664,7 +803,7 @@ function emitReady(
 ): void {
   const base = verdict.startsWith('boot')
     ? `远端实例已就绪 (${target})`
-    : `远端实例已就绪（旧探测兜底: ${verdict}）`
+    : `远端实例已就绪（${verdict}）`
   onEvent?.('ready', `${base}${skipSummary}`, { terminal: 'success' })
 }
 

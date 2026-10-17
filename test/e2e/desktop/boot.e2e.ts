@@ -1,7 +1,6 @@
 import type { DesktopApp } from '../support/desktop'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import process from 'node:process'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Key } from 'webdriverio'
 import { startDesktopApp } from '../support/desktop'
@@ -12,7 +11,7 @@ import { SETUP_ERROR, SHELL_IFRAME, SHELL_ROOT } from '../support/selectors'
 interface DshWindow extends Window {
   __dshE2eErrors?: string[]
   __TAURI_INTERNALS__?: {
-    invoke: (cmd: string) => Promise<{ service_url: string, node_version: string }>
+    invoke: (cmd: string) => Promise<{ service_url: string, node_version: string, dsh_version: string, data_dir: string, log_path: string }>
   }
 }
 
@@ -65,7 +64,7 @@ function dshRootText(selector: string): string {
   return document.querySelector(selector)?.textContent?.trim() ?? ''
 }
 
-describe.skipIf(process.platform === 'darwin')('桌面端启动冒烟', () => {
+describe('桌面端启动冒烟', () => {
   let app: DesktopApp | undefined
   let browser: WebdriverIO.Browser
 
@@ -98,6 +97,10 @@ describe.skipIf(process.platform === 'darwin')('桌面端启动冒烟', () => {
     })
 
     expect(info.node_version, '未解析到可用 Node 运行时').not.toBe('')
+    expect(info.dsh_version, '冷装配必须实际启动推荐的 rc.2 核心').toBe('0.2.1-rc.1')
+    expect(resolve(info.data_dir), '真实核心数据根必须隔离在本次 scratch').toBe(resolve(app!.home, 'home', '.dsh.dev'))
+    const logRelative = relative(app!.downloadCacheDir, info.log_path)
+    expect(isAbsolute(logRelative) || logRelative === '..' || logRelative.startsWith('../') || logRelative.startsWith('..\\'), '真实核心日志不得写入用户运行实例目录').toBe(false)
     expect(info.service_url, '内核未给出服务地址').toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
 
     const iframe = await browser.$(SHELL_IFRAME)
@@ -291,6 +294,11 @@ describe.skipIf(process.platform === 'darwin')('桌面端启动冒烟', () => {
     await click('dsh-appearance-zoom-1.2')
     await browser.waitUntil(async () => (await config()).zoom_factor === 1.2, { timeoutMsg: '本机界面缩放未从外观面板保存' })
     expect(await appearance(), '原生设置与所选外观不一致').toEqual({ palette: 'nord', terminal: true, transparency: true, opacity: 79, blur: true, sidebarOnly: false })
+    const storePath = join(app!.home, 'app-data', '.store.test.dat')
+    await expect.poll(() => existsSync(storePath), { message: '原生 Store 必须真实保存到本次隔离 app-data' }).toBe(true)
+    const persisted = JSON.parse(readFileSync(storePath, 'utf8')) as { setting: { zoom_factor: number, appearance: unknown } }
+    expect(persisted.setting.appearance, '隔离 Store 中必须存在刚保存的原生外观设置').toEqual(await appearance())
+    expect(persisted.setting.zoom_factor, '隔离 Store 中必须存在刚保存的缩放值').toBe(1.2)
     await click('dsh-appearance-reset')
     await browser.waitUntil(async () => (await appearance()).palette === 'default', { timeoutMsg: '原生外观设置未恢复默认值' })
     expect(await appearance(), '重置未还原完整原生外观设置').toEqual({ palette: 'default', terminal: false, transparency: false, opacity: 100, blur: false, sidebarOnly: false })

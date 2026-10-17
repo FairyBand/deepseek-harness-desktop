@@ -4,7 +4,7 @@ import type { SyncDeps } from './sync.types'
 import { defineService } from 'dsh-tauri'
 import { syncRuntimeDeps } from '../config/runtime'
 import { carryWorkspaceAllowlist, parseBuildAllowKeys } from '../utils/allowlist'
-import { dshEntryProbeCommand, firstLineOf } from './bootstrap.utils'
+import { assertRemoteDshVersion, dshEntryProbeCommand, firstLineOf } from './bootstrap.utils'
 import { machine } from './machine'
 import { buildPreview, dedupeBy, describeFailure, failureLogOf, installSpecOf, pluginAddCommand, skillExtractCommand } from './sync.utils'
 
@@ -61,6 +61,7 @@ async function applyPlugins(
 ): Promise<void> {
   if (plugins.length === 0)
     return
+  await assertRemoteDshVersion(session, true)
   const dshEntry = firstLineOf((await session.exec(dshEntryProbeCommand())).stdout)
   for (const plugin of plugins) {
     announceItem(machineId, progress, plugin.name)

@@ -1,14 +1,15 @@
 import type { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { cleanupWdioSession, createTauriCapabilities, startWdioSession } from '@wdio/tauri-service'
+import { assertDesktopArtifactsCurrent } from './artifacts'
 
 // ============================================================================
 // 常量定义
@@ -37,9 +38,6 @@ const TEST_STORE_FILE = '.store.test.dat'
 
 /** scratch home 的目录前缀。 */
 const SCRATCH_PREFIX = 'dsh-e2e-desktop-'
-
-/** 只清理超过该年龄的残留：足够避开并发会话正在使用的 scratch (30 分钟)。 */
-const STALE_HOME_AGE_MS = 30 * 60 * 1000
 
 /** WDIO 会话建立上限。 */
 const SESSION_TIMEOUT_MS = 120_000
@@ -128,13 +126,9 @@ export async function startDesktopApp(options: StartDesktopAppOptions = {}): Pro
     await assertPreconditions({ binaryPath })
   }
 
-  // 触发后台异步垃圾回收与 Store 重置（非阻塞）
-  void purgeStaleHomes()
-  const resetStorePromise = resetStore ? resetTestStore() : Promise.resolve()
-
-  const home = options.homeDir ?? makeHome(keepHome)
-
-  // 并行初始化目录与重置 Store
+  const home = options.homeDir
+    ? await assertScratchHome(options.homeDir)
+    : await mkdtemp(join(await realpath(tmpdir()), SCRATCH_PREFIX))
   const coldCache = options.coldCache ?? process.env.DSH_E2E_COLD_ASSEMBLY === '1'
   const cacheDir = options.downloadCacheDir
     ?? (coldCache
@@ -144,15 +138,28 @@ export async function startDesktopApp(options: StartDesktopAppOptions = {}): Pro
   await Promise.all([
     ensureHomeDirs(home),
     mkdir(cacheDir, { recursive: true }),
-    resetStorePromise,
+    resetStore ? resetTestStore(home) : Promise.resolve(),
   ])
 
   const profile = join(home, 'home')
+  const local = join(profile, 'AppData', 'Local')
   const env: Record<string, string> = {
     USERPROFILE: profile,
     HOME: profile,
+    APPDATA: join(profile, 'AppData', 'Roaming'),
+    LOCALAPPDATA: local,
+    XDG_CONFIG_HOME: join(profile, '.config'),
+    XDG_CACHE_HOME: join(profile, '.cache'),
+    XDG_DATA_HOME: join(profile, '.local', 'share'),
+    DSH_HOME: join(profile, '.dsh.dev'),
+    DSH_E2E_HOME: home,
     DSH_DOWNLOAD_CACHE_DIR: cacheDir,
     DSH_E2E_WEBVIEW_DATA_DIR: join(home, 'webview2'),
+    PNPM_HOME: join(local, 'pnpm'),
+    COREPACK_HOME: join(local, 'corepack'),
+    npm_config_userconfig: join(profile, '.npmrc'),
+    NPM_CONFIG_USERCONFIG: join(profile, '.npmrc'),
+    npm_config_cache: join(profile, '.npm'),
   }
 
   const capabilities = createTauriCapabilities(binaryPath, {
@@ -187,11 +194,11 @@ export async function startDesktopApp(options: StartDesktopAppOptions = {}): Pro
       }
     }
 
-    // 并行执行孤儿进程清理与端口释放等待，提升收尾效率
     await Promise.all([
       killOrphanHarness(cacheDir),
       waitForPortRelease(WEBDRIVER_PORT, 20),
     ])
+    await waitForPortRelease(APP_PORT, 20)
 
     if (keepHome || stopOptions.keepHome) {
       log(`保留 scratch home：${home}`)
@@ -270,10 +277,16 @@ async function waitForPortRelease(port: number, maxAttempts = 20): Promise<void>
   }
 }
 
-/** 应用真实 app-data 目录。 */
-function getAppDataDir(): string {
-  const roaming = process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming')
-  return join(roaming, 'dsh-tauri')
+/**
+ * 清理本车道遗留的 dsh 服务进程（其命令行携带下载缓存目录）。
+ */
+async function killOrphanHarness(cacheDir: string): Promise<void> {
+  if (process.platform !== 'win32')
+    return
+
+  const safePattern = cacheDir.replace(/'/g, '\'\'')
+  const script = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*${safePattern}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+  await execPowerShell(script)
 }
 
 /** 执行 PowerShell 命令的轻量辅助封装。 */
@@ -290,19 +303,6 @@ function execPowerShell(script: string): Promise<string> {
     child.once('error', () => resolve(''))
     child.once('close', () => resolve(output))
   })
-}
-
-/**
- * 清理本车道遗留的 dsh 服务进程。
- */
-async function killOrphanHarness(cacheDir: string): Promise<void> {
-  if (process.platform !== 'win32')
-    return
-
-  // PowerShell 路径单引号安全转义
-  const safePattern = cacheDir.replace(/'/g, '\'\'')
-  const script = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*${safePattern}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
-  await execPowerShell(script)
 }
 
 /**
@@ -332,13 +332,17 @@ export async function assertPreconditions(options: { port?: number, binaryPath?:
   const port = options.port ?? APP_PORT
   const binaryPath = options.binaryPath ?? defaultBinaryPath()
 
+  if (process.platform !== 'win32')
+    throw new Error('桌面 E2E 必须在 Windows 上运行；缺少原生 WebView2/WebDriver 环境不得跳过用例。')
+
   if (!existsSync(binaryPath)) {
     throw new Error(
       `二进制不存在：${binaryPath}；先在 src-tauri/ 下运行 \`tauri build --debug --no-bundle\`（必须带 custom-protocol，否则应用走 devUrl 而不嵌 dist）。`,
     )
   }
 
-  // 并行检测端口与残留进程，缩短校验耗时
+  assertDesktopArtifactsCurrent(REPO_ROOT, binaryPath)
+
   const [appPortBusy, webdriverPortBusy, liveProcess] = await Promise.all([
     isPortBusy(port),
     isPortBusy(WEBDRIVER_PORT),
@@ -360,68 +364,16 @@ export async function assertPreconditions(options: { port?: number, binaryPath?:
   }
 }
 
-/** 清空测试 Store（异步）。 */
-export async function resetTestStore(): Promise<void> {
-  const file = join(getAppDataDir(), TEST_STORE_FILE)
-  try {
-    await rm(file, { force: true })
-  }
-  catch {
-    // 忽略文件不存在或删除失败
-  }
+export async function resetTestStore(home: string): Promise<void> {
+  const scratch = await assertScratchHome(home)
+  await rm(join(scratch, 'app-data', TEST_STORE_FILE), { force: true })
 }
 
-let isStaleHomesPurged = false
-
-/**
- * 异步清理历史运行残留的 scratch home（单例非阻塞执行）。
- */
-export async function purgeStaleHomes(): Promise<void> {
-  if (isStaleHomesPurged)
-    return
-  isStaleHomesPurged = true
-
-  const root = tmpdir()
-  const deadline = Date.now() - STALE_HOME_AGE_MS
-
-  try {
-    const entries = await readdir(root)
-    const candidates = entries.filter(e => e.startsWith(SCRATCH_PREFIX))
-
-    const removePromises = candidates.map(async (entry) => {
-      const targetPath = join(root, entry)
-      try {
-        const stats = await stat(targetPath)
-        if (stats.mtimeMs <= deadline) {
-          await rm(targetPath, { recursive: true, force: true })
-          return true
-        }
-      }
-      catch {
-        // 忽略单个目录异常
-      }
-      return false
-    })
-
-    const results = await Promise.all(removePromises)
-    const removedCount = results.filter(Boolean).length
-
-    if (removedCount > 0) {
-      log(`清理历史 scratch：${removedCount} 个`)
-    }
-  }
-  catch {
-    // 忽略根目录读取异常
-  }
-}
-
-/** 建隔离根并派生 home 根。 */
-function makeHome(keep: boolean): string {
-  const home = join(tmpdir(), `${SCRATCH_PREFIX}${Date.now().toString(36)}`)
-  if (keep) {
-    log(`KEEP_HOME：${home}`)
-  }
-  return home
+async function assertScratchHome(home: string): Promise<string> {
+  const path = await realpath(home)
+  if (dirname(path) !== await realpath(tmpdir()) || !basename(path).startsWith(SCRATCH_PREFIX))
+    throw new Error(`桌面 E2E 仅可使用系统临时目录下的 ${SCRATCH_PREFIX} 独占根：${home}`)
+  return path
 }
 
 /** 建立隔离根内的 profile 目录。 */

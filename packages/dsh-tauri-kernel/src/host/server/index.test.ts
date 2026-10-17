@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import type { NativeModelCatalog } from '../../shared/native-model'
 import type { BackendDetection } from '../../shared/types'
 import type { NativeSession } from '../backends/types'
-import type { HostContext, PlatformLoader, RuntimeModules } from '../types'
+import type { HostContext, PlatformLoader } from '../types'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -18,7 +18,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentDefaultModelConfig } from '@deepseek-ai/dsh-agent-default-model'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import * as llmModule from '@deepseek-ai/dsh-llm'
-import * as legacySessionModule from '@deepseek-ai/dsh-session'
+import * as sessionModule from '@deepseek-ai/dsh-session'
 import { assertContiguous, materializeAppendBatch, materializeCreateHeader, SessionPersistence, SessionPersistenceRevision, validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
@@ -38,8 +38,6 @@ vi.mock('../utils/detection', () => ({ detectBackend: vi.fn() }))
 vi.mock('../backends/codex', () => ({ createCodexSession: vi.fn() }))
 vi.mock('../backends/claude', () => ({ createClaudeSession: vi.fn() }))
 
-const packageId: string = 'dsh-session-current'
-const sessionModule = await import(packageId) as typeof legacySessionModule & Pick<RuntimeModules, 'appendPluginRecord' | 'pluginRecordOf'>
 const require = createRequire(import.meta.url)
 const coreRequire = createRequire(require.resolve('@deepseek-ai/dsh-agent-loop'))
 const promptModule: { SystemPrompt: new (ctx: Context, config: { includeHarnessIdentity: boolean, includeRuntimeContext: boolean }) => Context['systemPrompt'] } = await import(pathToFileURL(coreRequire.resolve('@deepseek-ai/dsh-system-prompt')).href)
@@ -159,7 +157,7 @@ let llm: llmModule.LlmRuntime
 let persistence: MemoryPersistence
 let http: Server | undefined
 let rejection: 401 | 403 | undefined
-let runtimeSession: typeof legacySessionModule
+let runtimeSession: unknown
 let runtimeBoot: unknown
 let registered: Map<string, WebRoute>
 let requestRejection: ReturnType<typeof vi.fn<(request: IncomingMessage) => 401 | 403 | undefined>>
@@ -343,16 +341,17 @@ describe('exported bridge plugin HTTP dependency boundary', () => {
   })
 
   it('reports the official runtime version so the client can gate on it', async () => {
-    runtimeBoot = { getDshRuntimeVersion: () => '0.2.1-alpha.2' }
+    runtimeBoot = { getDshRuntimeVersion: () => '0.2.1-rc.1' }
     const base = await start()
     const response = await fetch(`${base}/api/tauri/bridge/backends`)
     expect(response.status).toBe(200)
     const payload = await response.json() as Array<Record<string, unknown>>
-    expect(payload[0]).toEqual({ ...dsh, version: '0.2.1-alpha.2' })
+    expect(payload[0]).toEqual({ ...dsh, version: '0.2.1-rc.1' })
   })
 
   it('retains CLI installation status while marking the bridge unavailable when official record support is absent', async () => {
-    runtimeSession = legacySessionModule
+    const { appendPluginRecord: _appendPluginRecord, pluginRecordOf: _pluginRecordOf, ...withoutPluginRecords } = sessionModule
+    runtimeSession = withoutPluginRecords
     const base = await start()
     const response = await fetch(`${base}/api/tauri/bridge/backends`)
     expect(response.status).toBe(200)

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * register/hero-workspace.test.ts — 英雄区工作区选择控件接管的注册契约回归测试。
  *
@@ -6,6 +7,9 @@
  * 未分组新建动作交给组件，并暴露目录流程槽的占用源（官方「添加工作区」入口据此决定是否出现）。
  */
 import type { ClientContext } from 'dsh-tauri/client'
+import type { SelectorHook } from '../types/selector'
+import type { SessionListStateLike } from '../ui/hero-workspace.types'
+import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { heroWorkspaceFeature } from './hero-workspace'
 
@@ -22,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   registrations: [] as Array<{ key: string, options: Record<string, unknown>, component: unknown }>,
   composerWorkspaceLess: true,
   workspaceServiceAvailable: true,
+  sessions: undefined as { list: { getSnapshot: () => { current?: string }, subscribe: (listener: () => void) => () => void } } | undefined,
+  sessionsService: undefined as { list: { getSnapshot: () => { current?: string }, subscribe: (listener: () => void) => () => void } } | undefined,
 }))
 
 vi.mock('../service/ungrouped-session', () => ({ startUngroupedSession: mocks.startUngroupedSession }))
@@ -49,9 +55,12 @@ vi.mock('dsh-tauri/client', () => ({
         },
       }
       setup(controller, this, {
-        service: (name: string) => name === 'workspaces' && mocks.workspaceServiceAvailable
-          ? mocks.workspaceService
-          : undefined,
+        get sessions() { return mocks.sessions },
+        service: (name: string) => name === 'sessions'
+          ? mocks.sessionsService
+          : name === 'workspaces' && mocks.workspaceServiceAvailable
+            ? mocks.workspaceService
+            : undefined,
         has: () => mocks.composerWorkspaceLess,
       })
       return () => controller.dispose()
@@ -81,6 +90,9 @@ function createCtx(options: { flowOccupied?: boolean } = {}) {
 }
 
 afterEach(() => {
+  cleanup()
+  mocks.sessions = undefined
+  mocks.sessionsService = undefined
   mocks.registrations.length = 0
   mocks.composerWorkspaceLess = true
   mocks.workspaceServiceAvailable = true
@@ -147,6 +159,92 @@ describe('heroWorkspaceFeature', () => {
     mocks.workspaceService.model.create.mockResolvedValue(workspace)
     await expect(injectFactory().createWorkspace!({ path: '/tmp/late' })).resolves.toBe(workspace)
     expect(mocks.workspaceService.model.create).toHaveBeenCalledWith({ path: '/tmp/late' })
+    dispose()
+  })
+
+  it.each(['sessions', 'sessionsService'] as const)('%s 的 current 投影随列表通知更新并在卸载时清理订阅', (source) => {
+    let snapshot: SessionListStateLike = { current: 'session-first' }
+    const listeners = new Set<() => void>()
+    const unsubscribe = vi.fn((listener: () => void) => listeners.delete(listener))
+    const list = {
+      getSnapshot: vi.fn(() => snapshot),
+      subscribe: vi.fn((listener: () => void) => {
+        listeners.add(listener)
+        return () => {
+          unsubscribe(listener)
+        }
+      }),
+    }
+    mocks[source] = { list }
+    if (source === 'sessions') {
+      mocks.sessionsService = {
+        list: {
+          getSnapshot: vi.fn(() => ({ current: 'wrong-fallback-session' })),
+          subscribe: vi.fn(() => () => {}),
+        },
+      }
+    }
+    const { ctx } = createCtx()
+    const dispose = heroWorkspaceFeature.call(ctx)
+    const injectFactory = mocks.registrations[0]!.options.inject as () => {
+      useSessions: SelectorHook<SessionListStateLike>
+    }
+    const { useSessions } = injectFactory()
+    const view = renderHook(() => useSessions(state => state.current))
+
+    expect(view.result.current, '必须读取适配层列表投影，而非 ctx 或空快照').toBe('session-first')
+    expect(list.getSnapshot).toHaveBeenCalled()
+    expect(listeners.size, '挂载后必须订阅真实列表源').toBe(1)
+    if (source === 'sessions') {
+      expect(mocks.sessionsService!.list.getSnapshot, '直接 sessions 存在时不得读服务兜底').not.toHaveBeenCalled()
+      expect(mocks.sessionsService!.list.subscribe).not.toHaveBeenCalled()
+    }
+
+    act(() => {
+      snapshot = { current: 'session-next' }
+      for (const listener of [...listeners])
+        listener()
+    })
+    expect(view.result.current, '列表通知必须触发 current 投影重新渲染').toBe('session-next')
+
+    act(() => {
+      snapshot = {}
+      for (const listener of [...listeners])
+        listener()
+    })
+    expect(view.result.current, '清空当前会话后不得保留旧 current').toBeUndefined()
+    expect(listeners.size, '重渲染不得叠加订阅').toBe(1)
+
+    const activeListener = [...listeners][0]!
+    const cleanupCount = unsubscribe.mock.calls.length
+    view.unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(cleanupCount + 1)
+    expect(unsubscribe).toHaveBeenLastCalledWith(activeListener)
+    expect(listeners.size, '卸载后列表不得保留订阅').toBe(0)
+    dispose()
+  })
+
+  it('sessions 缺席时投影为空，服务晚到后重渲染读取 current', () => {
+    const { ctx } = createCtx()
+    const dispose = heroWorkspaceFeature.call(ctx)
+    const injectFactory = mocks.registrations[0]!.options.inject as () => {
+      useSessions: SelectorHook<SessionListStateLike>
+    }
+    const { useSessions } = injectFactory()
+    const view = renderHook(() => useSessions(state => state.current))
+    expect(view.result.current, '服务缺席时必须稳定投影空 current').toBeUndefined()
+
+    const unsubscribe = vi.fn()
+    const subscribe = vi.fn(() => unsubscribe)
+    const snapshot = { current: 'session-late' }
+    mocks.sessionsService = {
+      list: { getSnapshot: () => snapshot, subscribe },
+    }
+    view.rerender()
+    expect(view.result.current, '不得永久捕获创建适配层时缺席的服务').toBe('session-late')
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    view.unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
     dispose()
   })
 

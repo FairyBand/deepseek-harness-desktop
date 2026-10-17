@@ -3,10 +3,12 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: a development-only playground that renders the component registry of `dsh-tauri-ui`, so it shows — but does not copy — official client UI components.
 
@@ -14,10 +16,10 @@ Official surface referenced:
 
 - Registry semantics: the `reexport` (official implementation forwarded as is, styles from the official CSS Modules) and `refork` (official CSS reproduced locally because only the newer kernel implements or exports the component) distinctions, including the official class each refork maps to (`src/client/ui/components-playground/ui-components.tsx:112,128-130,252`).
 - Official `Menu`: wired into the chip triggers so selection state, chevron rotation and popover placement behave like the shipped UI (`ui-components.tsx:57`).
-- Icons: two kernel generations export the official icons barrel under different names, so icons are consumed through `@gravity-ui/icons` re-exported by `dsh-tauri-ui/client` (`ui-components.tsx:262`).
+- Icons: consumed through `@gravity-ui/icons` re-exported by `dsh-tauri-ui/client`, without assuming that official icon barrel names match across supported cores (`ui-components.tsx:262`).
 - Derivation table of those official components: `packages/dsh-tauri-ui/THIRD_PARTY_NOTICES.md`.
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The playground continues to consume the shared registry and official primitives through `dsh-tauri-ui/client`; the additive InlineEditor and shell seat need no local component migration.
 

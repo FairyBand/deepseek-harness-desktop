@@ -1,22 +1,8 @@
-/**
- * register/index.adapter.test.ts — DSH 升级迁移适配层的边界测试。
- *
- * 覆盖：modern / legacy 两种服务布局的世代探测与投影、方法 this 绑定与 list 引用稳定性、
- * Cordis inject 守卫抛错与属性回退、DOM 退级与「不可用」明确回报、`addWorkspace` 全流程与
- * 用户取消、自定义迁移的追加顺序、单条迁移失败不中断装配。
- *
- * 用例只用 `ctx.get` / `ctx[name]` 的返回形态构造上下文（与真实探测路径一致）；
- * DOM 依赖用 `vi.stubGlobal('document', …)` 提供最小假实现（仓库未装 jsdom）。
- */
 import type { AdapterAddWorkspaceRuntime, AdapterRuntimeObject, ClientAdapter, DshMigration } from './index'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineAdapter } from './index'
 
-/** 假 ObservableSnapshot（`list.subscribe` / `list.getSnapshot`）。 */
-function makeList(snapshot: unknown = { ids: [] }): {
-  getSnapshot: ReturnType<typeof vi.fn>
-  subscribe: ReturnType<typeof vi.fn>
-} {
+function makeList(snapshot: unknown = { ids: [] }) {
   const listeners = new Set<() => void>()
   return {
     getSnapshot: vi.fn(() => snapshot),
@@ -27,33 +13,26 @@ function makeList(snapshot: unknown = { ids: [] }): {
   }
 }
 
-/** 只带 `ctx.get` 的最小客户端上下文（探测完全基于它的返回形态）。 */
 function makeContext(services: Record<string, unknown>): unknown {
   return { get: (name: string) => services[name] }
 }
 
-/** 可变 ObservableSnapshot：测试里能主动 publish，验证投影的订阅扇出与引用稳定。 */
-function makeLiveList<T>(initial: T): {
-  getSnapshot: () => T
-  subscribe: (listener: () => void) => () => void
-  publish: (next: T) => void
-} {
+function makeLiveList<T>(initial: T) {
   let value = initial
   const listeners = new Set<() => void>()
   return {
     getSnapshot: () => value,
-    subscribe: (listener) => {
+    subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    publish: (next) => {
+    publish: (next: T) => {
       value = next
       for (const listener of [...listeners]) listener()
     },
   }
 }
 
-/** 非空收窄（tsc / lint 友好的断言辅助，不用 `!`）。 */
 function requireAddWorkspace(adapter: ClientAdapter): AdapterAddWorkspaceRuntime {
   const runtime = adapter.resolveAddWorkspace()
   if (runtime === undefined)
@@ -61,7 +40,6 @@ function requireAddWorkspace(adapter: ClientAdapter): AdapterAddWorkspaceRuntime
   return runtime
 }
 
-/** 每个用例一个安静告警出口：只记录，不打印。 */
 function makeWarn() {
   return vi.fn<(message: string, error?: unknown) => void>()
 }
@@ -71,188 +49,154 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('defineAdapter — 世代探测与内置迁移', () => {
-  it('modern 布局：sessions.list 即投影，导航与目录选择都在 workspaces', () => {
+describe('defineAdapter — supported client services', () => {
+  it('projects official session lists and uiWorkspace navigation without legacy migrations', () => {
     const sessionsList = makeList()
     const workspacesList = makeList()
     const adapter = defineAdapter(makeContext({
       sessions: { list: sessionsList },
-      workspaces: {
-        list: workspacesList,
-        create: vi.fn(),
-        pickDirectory: vi.fn(),
-        startSession: vi.fn(),
-      },
+      workspaces: { list: workspacesList, create: vi.fn() },
+      uiWorkspace: { pickDirectory: vi.fn(), startSession: vi.fn() },
     }))
 
     expect(adapter.generation).toBe('modern')
-    // 工作区导航投影无条件安装、候选能力在调用期解析：判定「uiWorkspace 创建期在不在场」
-    // 会让晚激活的服务永远接不上（issue #756），因此 modern 布局同样装上投影。
-    expect(adapter.migrations).toContain('services:auto-bind')
-    expect(adapter.migrations).toContain('sessions:list-projection')
-    expect(adapter.migrations).toContain('legacy:workspaces-navigation')
-    expect(adapter.migrations).not.toContain('sessions:provide-info-bridge')
-    expect(adapter.migrations).toContain('navigation:resolve-start-session')
-    expect(adapter.migrations).toContain('workspace:resolve-add-workspace')
+    expect(adapter.migrations).toEqual([
+      'services:auto-bind',
+      'sessions:list-projection',
+      'sessions:current-projection',
+      'workspaces:navigation',
+      'navigation:resolve-start-session',
+      'sessions:open-bridge',
+      'workspace:resolve-add-workspace',
+    ])
     expect(adapter.failures).toEqual([])
-
-    // 顶层别名是同一份 feed 的转发（老写法读 ctx.sessions.getSnapshot 也能用）
     expect(adapter.sessions.getSnapshot?.()).toEqual({ ids: [] })
     expect(adapter.sessions.list?.getSnapshot()).toEqual({ ids: [] })
-
     expect(adapter.has('sessions.list')).toBe(true)
     expect(adapter.has('workspaces.list')).toBe(true)
     expect(adapter.has('workspaces.create')).toBe(true)
     expect(adapter.has('navigation.startSession')).toBe(true)
     expect(adapter.has('navigation.addWorkspace')).toBe(true)
-    // modern 的 sessions 面没有 legacy 的 per-session 查询，且无 uiSession 桥可用
     expect(adapter.has('sessions.provideInfo')).toBe(false)
   })
 
-  it('legacy 布局：uiWorkspace 提供导航与目录选择，sessions 嵌套投影被补齐', () => {
-    const snapshot = { ids: ['s1'] }
-    const list = makeList(snapshot)
+  it('binds navigation and bindingSource to their official owners', () => {
+    const list = makeList({ ids: ['s1'] })
     const startSession = vi.fn()
     const connectWorkspace = vi.fn()
-    const pickDirectory = vi.fn()
-    const resolve = vi.fn(() => ({ props: { inputActions: { submit: true } } }))
+    const inputActions = { submit: true }
+    const binding = { scope: 'retained' }
+    const bindingSource = vi.fn(() => makeList({ props: { inputActions } }))
+    const uiWorkspace = { startSession, connectWorkspace }
+    const uiAdapter = { bindingSource }
     const adapter = defineAdapter(makeContext({
-      sessions: { list, binding: vi.fn(() => ({})) },
-      uiWorkspace: { startSession, connectWorkspace, pickDirectory },
-      uiSession: { adapter: { resolve } },
+      sessions: { list, binding: vi.fn(() => binding) },
+      uiWorkspace,
+      uiSession: { adapter: uiAdapter },
     }))
 
-    expect(adapter.generation).toBe('legacy')
-    expect(adapter.migrations).toContain('sessions:list-projection')
-    expect(adapter.migrations).toContain('sessions:provide-info-bridge')
-    expect(adapter.migrations).toContain('legacy:workspaces-navigation')
-
-    // 嵌套投影补齐成与新版同形的 getSnapshot / subscribe（订阅转发：核心列表发布即通知消费方）
-    expect(adapter.sessions.getSnapshot?.()).toEqual(snapshot)
     const listener = vi.fn()
-    adapter.sessions.subscribe?.(listener)
-    expect(list.subscribe).toHaveBeenCalledTimes(1)
+    const off = adapter.sessions.subscribe?.(listener)
+    expect(list.subscribe).toHaveBeenCalledOnce()
     list.subscribe.mock.calls[0]?.[0]?.()
-    expect(listener).toHaveBeenCalledTimes(1)
-
-    // per-session 信息：legacy 走 binding + uiSession.adapter.resolve 投影
-    expect(adapter.has('sessions.provideInfo')).toBe(true)
-    expect(adapter.sessions.provideInfo?.('s1')).toEqual({ props: { inputActions: { submit: true } } })
-    expect(resolve).toHaveBeenCalledWith('s1')
-
-    // 导航能力落到 uiWorkspace，且 this 必须绑回该服务
+    expect(listener).toHaveBeenCalledOnce()
+    off?.()
+    expect(adapter.sessions.provideInfo?.('s1')).toEqual({ props: { inputActions } })
+    expect(bindingSource).toHaveBeenCalledWith({ sessionId: 's1', binding })
+    expect(bindingSource.mock.instances[0]).toBe(uiAdapter)
     adapter.workspaces.startSession?.('w1')
     expect(startSession).toHaveBeenCalledWith('w1')
-    expect(startSession.mock.instances[0]).toMatchObject({ startSession })
-
+    expect(startSession.mock.instances[0]).toBe(uiWorkspace)
     adapter.workspaces.connectWorkspace?.('w1')
     expect(connectWorkspace).toHaveBeenCalledWith('w1')
-
     adapter.resolveStartSession()?.('w2')
     expect(startSession).toHaveBeenCalledWith('w2')
   })
 
-  it('工作区导航投影：创建期 uiWorkspace 尚未激活，服务到达后 connectWorkspace / startSession 照常可用', () => {
+  it('resolves late uiWorkspace navigation and directory selection without rebuilding the adapter', () => {
     const connectWorkspace = vi.fn(() => 's1')
     const startSession = vi.fn()
     const list = makeList()
-    // `dsh-client-ui-workspace` 额外等 ui-session / connection，可能晚于 dsh-tauri-pet 创建：
-    // 创建期读不到 uiWorkspace 是常态，投影的安装判据不能依赖它（issue #756）。
     const services: Record<string, unknown> = { sessions: { list }, workspaces: { list, create: vi.fn() } }
     const adapter = defineAdapter(makeContext(services))
-
-    expect(adapter.migrations).toContain('legacy:workspaces-navigation')
-    // 两个候选都没有该能力时诚实缺席，而不是给一个调用即崩的假投影
     expect(adapter.workspaces.connectWorkspace).toBeUndefined()
     expect(adapter.has('navigation.startSession')).toBe(false)
     expect(adapter.resolveStartSession()).toBeUndefined()
     expect(adapter.has('navigation.addWorkspace')).toBe(false)
 
-    // uiWorkspace 稍后激活：投影在调用期重读服务，无需重建适配层
-    services.uiWorkspace = { connectWorkspace, startSession, pickDirectory: vi.fn().mockResolvedValue('D:/work/demo') }
+    const uiWorkspace = { connectWorkspace, startSession, pickDirectory: vi.fn().mockResolvedValue('D:/work/demo') }
+    services.uiWorkspace = uiWorkspace
     expect(adapter.workspaces.connectWorkspace?.('w1')).toBe('s1')
-    expect(connectWorkspace).toHaveBeenCalledWith('w1')
-    expect(connectWorkspace.mock.instances[0]).toMatchObject({ connectWorkspace })
-
+    expect(connectWorkspace.mock.instances[0]).toBe(uiWorkspace)
     expect(adapter.has('navigation.startSession')).toBe(true)
     adapter.resolveStartSession()?.('w2')
     expect(startSession).toHaveBeenCalledWith('w2')
     adapter.workspaces.startSession?.('w3')
     expect(startSession).toHaveBeenCalledWith('w3')
-    expect(startSession.mock.instances[0]).toMatchObject({ startSession })
-
-    // 目录选择是工作区侧原生实现：晚到的 uiWorkspace 也要能接上聚合出的 addWorkspace
+    expect(startSession.mock.instances[0]).toBe(uiWorkspace)
     expect(adapter.has('navigation.addWorkspace')).toBe(true)
     expect(requireAddWorkspace(adapter).pickDirectory).toBeTypeOf('function')
   })
 
-  it('provideInfo 桥原生优先：原生只覆盖部分会话时回退 binding + uiSession 投影', () => {
-    const resolve = vi.fn(() => ({ props: { inputActions: { submit: true } } }))
+  it('preserves native provideInfo results and falls back to bindingSource for missing or failed materialization', () => {
+    const binding = {}
+    const bindingSource = vi.fn(() => makeList({ props: { inputActions: { submit: true } } }))
+    const provideInfo = vi.fn((id: string) => {
+      if (id === 'failed')
+        throw new Error('materializing')
+      return id === 'native' ? { props: { native: true } } : undefined
+    })
     const adapter = defineAdapter(makeContext({
-      sessions: {
-        list: makeList(),
-        // 原生实现只认 'native'：其余会话交给兼容桥
-        provideInfo: vi.fn((sessionId: string) => (sessionId === 'native' ? { props: { native: true } } : undefined)),
-        binding: vi.fn(() => ({})),
-      },
-      uiSession: { adapter: { resolve } },
+      sessions: { list: makeList(), provideInfo, binding: vi.fn(() => binding) },
+      uiSession: { adapter: { bindingSource } },
     }))
-
-    expect(adapter.migrations).toContain('sessions:provide-info-bridge')
     expect(adapter.sessions.provideInfo?.('native')).toEqual({ props: { native: true } })
-    expect(resolve).not.toHaveBeenCalled()
-
+    expect(bindingSource).not.toHaveBeenCalled()
     expect(adapter.sessions.provideInfo?.('s1')).toEqual({ props: { inputActions: { submit: true } } })
-    expect(resolve).toHaveBeenCalledWith('s1')
+    expect(bindingSource).toHaveBeenCalledWith({ sessionId: 's1', binding })
+    expect(adapter.sessions.provideInfo?.('failed')).toEqual({ props: { inputActions: { submit: true } } })
   })
 
-  it('uiWorkspace 只有目录选择时，导航回退到 workspaces 原生实现（不静默吞掉）', () => {
+  it('does not advertise navigation or directory selection from removed workspaces APIs', () => {
     const nativeStart = vi.fn()
-    const pickDirectory = vi.fn().mockResolvedValue('D:/work/demo')
-    const create = vi.fn().mockResolvedValue({ workspaceId: 'w1' })
     const adapter = defineAdapter(makeContext({
-      uiWorkspace: { pickDirectory },
-      workspaces: { startSession: nativeStart, create },
+      uiWorkspace: { pickDirectory: vi.fn() },
+      workspaces: { startSession: nativeStart, create: vi.fn() },
     }))
-
-    expect(adapter.generation).toBe('legacy')
-    // uiWorkspace 缺席 startSession，不该因此丢掉 workspaces 的原生导航
-    expect(adapter.has('navigation.startSession')).toBe(true)
-    adapter.resolveStartSession()?.('w1')
-    expect(nativeStart).toHaveBeenCalledWith('w1')
-
-    // 目录选择来自 uiWorkspace、建工作区/开会话来自 workspaces：混合宿主也能聚合
-    const runtime = requireAddWorkspace(adapter)
-    expect(runtime.pickDirectory).toBeTypeOf('function')
-    expect(adapter.has('navigation.addWorkspace')).toBe(true)
+    expect(adapter.generation).toBe('modern')
+    expect(adapter.has('navigation.startSession')).toBe(false)
+    expect(adapter.resolveStartSession()).toBeUndefined()
+    expect(adapter.workspaces.startSession).toBeUndefined()
+    expect(adapter.has('navigation.addWorkspace')).toBe(false)
+    expect(nativeStart).not.toHaveBeenCalled()
+    const misplacedPicker = defineAdapter(makeContext({
+      workspaces: { pickDirectory: vi.fn(), create: vi.fn() },
+      uiWorkspace: { startSession: vi.fn() },
+    }))
+    expect(misplacedPicker.has('navigation.addWorkspace')).toBe(false)
   })
 
-  it('官方服务方法绑定到原对象（解构后仍可用），list 投影引用稳定', () => {
+  it('binds detached service methods to their original objects and stabilizes list references', () => {
     const list = makeList()
-    const startSession = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list, refresh: vi.fn() },
-      workspaces: { list, startSession, create: vi.fn() },
-    }))
-
-    const { startSession: detached } = adapter.workspaces
-    detached?.('w1')
-    expect(startSession.mock.instances[0]).toMatchObject({ startSession })
-
-    // uSES 快照比较依赖 list 引用稳定：同一服务多次读取必须是同一个投影
+    const sessions = { list, refresh: vi.fn() }
+    const uiWorkspace = { startSession: vi.fn() }
+    const adapter = defineAdapter(makeContext({ sessions, workspaces: { list }, uiWorkspace }))
+    const { refresh } = adapter.sessions
+    refresh?.()
+    expect(sessions.refresh.mock.instances[0]).toBe(sessions)
+    const { startSession } = adapter.workspaces
+    startSession?.('w1')
+    expect(uiWorkspace.startSession.mock.instances[0]).toBe(uiWorkspace)
     expect(adapter.sessions.list).toBe(adapter.sessions.list)
     expect(adapter.workspaces.list).toBe(adapter.workspaces.list)
   })
 
-  it('ctx 投影替换 sessions/workspaces，其余成员透传；服务缺失时返回空投影', () => {
-    const list = makeList()
-    const ctx: AdapterRuntimeObject = { sessions: { list }, marker: 'keep-me', get: () => undefined }
+  it('replaces projected context services, forwards unrelated members and tolerates missing services', () => {
+    const ctx: AdapterRuntimeObject = { sessions: { list: makeList() }, marker: 'keep-me', get: () => undefined }
     const adapter = defineAdapter(ctx)
-
-    expect((adapter.ctx as AdapterRuntimeObject).sessions).toBe(adapter.sessions)
-    expect((adapter.ctx as AdapterRuntimeObject).workspaces).toBe(adapter.workspaces)
-    expect((adapter.ctx as AdapterRuntimeObject).marker).toBe('keep-me')
-
+    expect(adapter.ctx.sessions).toBe(adapter.sessions)
+    expect(adapter.ctx.workspaces).toBe(adapter.workspaces)
+    expect(adapter.ctx.marker).toBe('keep-me')
     const bare = defineAdapter({ get: () => undefined })
     expect(bare.generation).toBe('unknown')
     expect(bare.has('sessions.list')).toBe(false)
@@ -260,12 +204,9 @@ describe('defineAdapter — 世代探测与内置迁移', () => {
     expect(bare.sessions.getSnapshot).toBeUndefined()
   })
 
-  it('ctx 是 undefined / 非对象 / inject 守卫抛错时都不抛，按服务缺失处理', () => {
-    expect(() => defineAdapter(undefined)).not.toThrow()
-    expect(() => defineAdapter(42)).not.toThrow()
+  it('treats invalid contexts and throwing inject guards as absent capabilities', () => {
     expect(defineAdapter(undefined).generation).toBe('unknown')
-
-    // Cordis 对未声明键的 inject-only 守卫会抛错：探测必须吞掉并当作服务不存在
+    expect(defineAdapter(42).generation).toBe('unknown')
     const guarded = defineAdapter({
       get: (name: string) => {
         if (name === 'sessions')
@@ -273,174 +214,133 @@ describe('defineAdapter — 世代探测与内置迁移', () => {
         return name === 'uiWorkspace' ? { startSession: vi.fn() } : undefined
       },
     })
-    expect(guarded.generation).toBe('legacy')
+    expect(guarded.generation).toBe('modern')
     expect(guarded.sessions.getSnapshot).toBeUndefined()
     expect(guarded.has('navigation.startSession')).toBe(true)
-
-    // 没有 ctx.get 时回退属性读取（非 cordis 宿主的兼容路径）
-    const list = makeList()
-    const attribute = defineAdapter({ sessions: { list } })
+    const attribute = defineAdapter({ sessions: { list: makeList() } })
     expect(attribute.generation).toBe('modern')
-    expect(attribute.sessions.list).toBeDefined()
+    expect(attribute.has('sessions.list')).toBe(true)
   })
 })
 
-describe('defineAdapter — 退级阶梯（官方服务 → DOM → 明确不可用）', () => {
-  it('startSession：官方服务优先，thenable 才 await', async () => {
+describe('defineAdapter — fallback ladder', () => {
+  it('prefers official startSession and awaits only thenables', async () => {
     const startSession = vi.fn().mockResolvedValue('ok')
     const adapter = defineAdapter(makeContext({ uiWorkspace: { startSession } }), { onWarn: makeWarn() })
-
     await expect(adapter.startSession('w1')).resolves.toEqual({ status: 'started', value: 'ok' })
     expect(startSession).toHaveBeenCalledWith('w1')
-
-    // 同步返回值不做无意义等待：outcome 立刻可用
-    const sync = vi.fn()
-    const syncAdapter = defineAdapter(makeContext({ uiWorkspace: { startSession: sync } }), { onWarn: makeWarn() })
-    await expect(syncAdapter.startSession()).resolves.toEqual({ status: 'started', value: undefined })
+    const sync = defineAdapter(makeContext({ uiWorkspace: { startSession: vi.fn() } }), { onWarn: makeWarn() })
+    await expect(sync.startSession()).resolves.toEqual({ status: 'started', value: undefined })
   })
 
-  it('startSession：服务缺席时点官方按钮，按钮也缺席才回报不可用并告警', async () => {
+  it('delegates missing startSession to the official button or reports unavailable', async () => {
     const click = vi.fn()
     vi.stubGlobal('document', { querySelector: vi.fn(() => ({ click })) })
     const delegated = defineAdapter(undefined, { onWarn: makeWarn() })
     expect(delegated.has('dom.newSession')).toBe(true)
     await expect(delegated.startSession()).resolves.toEqual({ status: 'delegated' })
-    expect(click).toHaveBeenCalledTimes(1)
-
+    expect(click).toHaveBeenCalledOnce()
     vi.stubGlobal('document', { querySelector: vi.fn(() => null) })
     const warn = makeWarn()
     const unavailable = defineAdapter(undefined, { onWarn: warn })
-    const outcome = await unavailable.startSession()
-    expect(outcome.status).toBe('unavailable')
+    expect((await unavailable.startSession()).status).toBe('unavailable')
     expect(warn.mock.calls[0][0]).toContain('startSession unavailable')
   })
 
-  it('composer.workspace-less：只认桌面壳补丁写在 <html> 上的能力标记', () => {
+  it('reads workspace-less composer support only from the desktop capability marker', () => {
     vi.stubGlobal('document', { documentElement: { getAttribute: () => '1' } })
-    expect(defineAdapter(undefined, { onWarn: makeWarn() }).has('composer.workspace-less')).toBe(true)
-
+    expect(defineAdapter(undefined).has('composer.workspace-less')).toBe(true)
     vi.stubGlobal('document', { documentElement: { getAttribute: () => null } })
-    expect(defineAdapter(undefined, { onWarn: makeWarn() }).has('composer.workspace-less')).toBe(false)
+    expect(defineAdapter(undefined).has('composer.workspace-less')).toBe(false)
   })
 
-  it('addWorkspace：官方三段能力全流程', async () => {
+  it('adds a workspace through the official picker, registry and navigation owners', async () => {
     const pickDirectory = vi.fn().mockResolvedValue('D:/work/demo')
     const create = vi.fn().mockResolvedValue({ workspaceId: 'w1' })
     const startSession = vi.fn()
-    const adapter = defineAdapter(
-      makeContext({ workspaces: { pickDirectory, create, startSession } }),
-      { onWarn: makeWarn() },
-    )
-
-    await expect(adapter.addWorkspace()).resolves.toEqual({
-      status: 'created',
-      workspaceId: 'w1',
-      path: 'D:/work/demo',
-      sessionStarted: true,
-    })
+    const workspaces = { create }
+    const uiWorkspace = { pickDirectory, startSession }
+    const adapter = defineAdapter(makeContext({ workspaces, uiWorkspace }), { onWarn: makeWarn() })
+    await expect(adapter.addWorkspace()).resolves.toEqual({ status: 'created', workspaceId: 'w1', path: 'D:/work/demo', sessionStarted: true })
     expect(create).toHaveBeenCalledWith({ path: 'D:/work/demo' })
+    expect(create.mock.instances[0]).toBe(workspaces)
     expect(startSession).toHaveBeenCalledWith('w1')
-    // 方法必须绑到各自的服务实例上
-    expect(pickDirectory.mock.instances[0]).toMatchObject({ pickDirectory })
-    expect(startSession.mock.instances[0]).toMatchObject({ startSession })
+    expect(pickDirectory.mock.instances[0]).toBe(uiWorkspace)
+    expect(startSession.mock.instances[0]).toBe(uiWorkspace)
   })
 
-  it('addWorkspace：用户取消是正常结果；openSession:false 不建会话', async () => {
-    const create = vi.fn()
+  it('treats directory cancellation as normal and respects openSession:false', async () => {
+    const create = vi.fn().mockResolvedValue({ workspaceId: 'w1' })
     const startSession = vi.fn()
-    const cancelled = defineAdapter(
-      makeContext({ workspaces: { pickDirectory: vi.fn().mockResolvedValue(null), create, startSession } }),
-      { onWarn: makeWarn() },
-    )
+    const cancelled = defineAdapter(makeContext({
+      workspaces: { create },
+      uiWorkspace: { pickDirectory: vi.fn().mockResolvedValue(null), startSession },
+    }))
     await expect(cancelled.addWorkspace()).resolves.toEqual({ status: 'cancelled' })
     expect(create).not.toHaveBeenCalled()
-
-    const adapter = defineAdapter(
-      makeContext({
-        workspaces: {
-          pickDirectory: vi.fn().mockResolvedValue('D:/work/demo'),
-          create: vi.fn().mockResolvedValue({ workspaceId: 'w1' }),
-          startSession,
-        },
-      }),
-      { onWarn: makeWarn() },
-    )
-    await expect(adapter.addWorkspace({ openSession: false })).resolves.toMatchObject({
-      status: 'created',
-      sessionStarted: false,
-    })
+    const adapter = defineAdapter(makeContext({
+      workspaces: { create },
+      uiWorkspace: { pickDirectory: vi.fn().mockResolvedValue('D:/work/demo'), startSession },
+    }))
+    await expect(adapter.addWorkspace({ openSession: false })).resolves.toEqual({ status: 'created', workspaceId: 'w1', path: 'D:/work/demo', sessionStarted: false })
     expect(startSession).not.toHaveBeenCalled()
   })
 
-  it('addWorkspace：三段能力缺一时点官方按钮，按钮也缺席才回报不可用', async () => {
-    // 缺 workspaces.create
-    vi.stubGlobal('document', { querySelector: vi.fn(() => ({ click: vi.fn() })) })
-    const delegated = defineAdapter(
-      makeContext({ workspaces: { pickDirectory: vi.fn(), startSession: vi.fn() } }),
-      { onWarn: makeWarn() },
-    )
+  it('delegates an incomplete addWorkspace capability or explicitly reports unavailable', async () => {
+    const click = vi.fn()
+    vi.stubGlobal('document', { querySelector: vi.fn(() => ({ click })) })
+    const delegated = defineAdapter(makeContext({ uiWorkspace: { pickDirectory: vi.fn(), startSession: vi.fn() } }))
     expect(delegated.has('navigation.addWorkspace')).toBe(false)
     await expect(delegated.addWorkspace()).resolves.toEqual({ status: 'delegated' })
-
+    expect(click).toHaveBeenCalledOnce()
     vi.stubGlobal('document', { querySelector: vi.fn(() => null) })
     const warn = makeWarn()
     const unavailable = defineAdapter(undefined, { onWarn: warn })
-    const outcome = await unavailable.addWorkspace()
-    expect(outcome.status).toBe('unavailable')
+    expect((await unavailable.addWorkspace()).status).toBe('unavailable')
     expect(warn.mock.calls[0][0]).toContain('addWorkspace unavailable')
   })
 })
 
-describe('defineAdapter — 迁移注册表', () => {
-  it('自定义迁移在默认迁移之后执行，可覆盖既有投影', async () => {
+describe('defineAdapter — migrations', () => {
+  it('runs custom migrations last and allows explicit navigation projections', async () => {
     const custom = vi.fn()
+    const open = vi.fn()
     const migration: DshMigration = {
       id: 'test:custom-navigation',
       detect: () => true,
       apply(surface) {
         surface.startSession = () => custom()
+        surface.openSession = open
       },
     }
-    const adapter = defineAdapter(makeContext({ uiWorkspace: { startSession: vi.fn() } }), {
-      migrations: [migration],
-      onWarn: makeWarn(),
-    })
-
+    const adapter = defineAdapter(undefined, { migrations: [migration], onWarn: makeWarn() })
     expect(adapter.migrations.at(-1)).toBe('test:custom-navigation')
     await adapter.startSession('w1')
-    expect(custom).toHaveBeenCalledTimes(1)
+    expect(custom).toHaveBeenCalledOnce()
+    expect(adapter.openSession('s1').status).toBe('opened')
+    expect(open).toHaveBeenCalledWith('s1')
   })
 
-  it('detect 为 false 的迁移不执行、不记入 migrations', () => {
+  it('does not apply or record a migration whose detection returns false', () => {
     const apply = vi.fn()
-    const adapter = defineAdapter(undefined, {
-      migrations: [{ id: 'test:skipped', detect: () => false, apply }],
-      onWarn: makeWarn(),
-    })
-
+    const adapter = defineAdapter(undefined, { migrations: [{ id: 'test:skipped', detect: () => false, apply }], onWarn: makeWarn() })
     expect(apply).not.toHaveBeenCalled()
     expect(adapter.migrations).not.toContain('test:skipped')
     expect(adapter.failures).toEqual([])
   })
 
-  it('单条迁移失败只记录 failures 并告警，后续迁移与装配照常', () => {
+  it('records failed migrations and warnings while continuing subsequent migrations', () => {
     const late = vi.fn()
     const warn = makeWarn()
+    const error = new Error('projection failed')
     const adapter = defineAdapter(undefined, {
       migrations: [
-        {
-          id: 'test:boom',
-          detect: () => true,
-          apply: () => {
-            throw new Error('projection failed')
-          },
-        },
+        { id: 'test:boom', detect: () => true, apply: () => { throw error } },
         { id: 'test:late', detect: () => true, apply: surface => void (surface.startSession = () => late()) },
       ],
       onWarn: warn,
     })
-
-    expect(adapter.failures.map(failure => failure.migration)).toEqual(['test:boom'])
+    expect(adapter.failures).toEqual([{ migration: 'test:boom', error }])
     expect(adapter.migrations).not.toContain('test:boom')
     expect(adapter.migrations).toContain('test:late')
     expect(warn.mock.calls[0][0]).toContain('test:boom')
@@ -448,100 +348,91 @@ describe('defineAdapter — 迁移注册表', () => {
   })
 })
 
-describe('defineAdapter — openSession 能力', () => {
-  it('0.1.6-alpha.2 布局：导航落在 uiWorkspace.openSession', () => {
+describe('defineAdapter — session navigation and projections', () => {
+  it('opens sessions through uiWorkspace rather than removed core navigation methods', () => {
     const openSession = vi.fn()
+    const oldOpen = vi.fn()
     const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList() },
-      workspaces: { list: makeList(), open: vi.fn() },
+      sessions: { list: makeList(), open: oldOpen },
+      workspaces: { open: oldOpen },
       uiWorkspace: { openSession },
     }))
-
-    expect(adapter.migrations).toContain('navigation:resolve-open-session')
     expect(adapter.has('navigation.openSession')).toBe(true)
-    expect(adapter.openSession('s-2').status).toBe('opened')
-    expect(openSession).toHaveBeenCalledWith('s-2')
+    expect(adapter.openSession('s2').status).toBe('opened')
+    adapter.sessions.open?.('s1')
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(openSession).toHaveBeenCalledWith('s2')
+    expect(oldOpen).not.toHaveBeenCalled()
   })
 
-  it('初始候选缺席时：workspaces.open 优先于 sessions.open', () => {
-    const workspaceOpen = vi.fn()
-    const sessionOpen = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList(), open: sessionOpen },
-      workspaces: { list: makeList(), open: workspaceOpen },
-    }))
-
-    adapter.openSession('s-3')
-    expect(workspaceOpen).toHaveBeenCalledWith('s-3')
-    expect(sessionOpen).not.toHaveBeenCalled()
-  })
-
-  it('旧核心：uiWorkspace 缺席时回退 sessions.open', () => {
-    const open = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList(), open },
-    }))
-
-    expect(adapter.resolveOpenSession()).toBeDefined()
-    expect(adapter.openSession('s-4').status).toBe('opened')
-    expect(open).toHaveBeenCalledWith('s-4')
-  })
-
-  it('能力全缺：明确回报 unavailable 并告警', () => {
+  it('does not mistake removed sessions.open or workspaces.open for supported navigation', () => {
+    const oldOpen = vi.fn()
     const warn = makeWarn()
-    const adapter = defineAdapter(makeContext({ sessions: { list: makeList() } }), { onWarn: warn })
-
+    const adapter = defineAdapter(makeContext({ sessions: { open: oldOpen }, workspaces: { open: oldOpen } }), { onWarn: warn })
+    expect(adapter.resolveOpenSession()).toBeUndefined()
     expect(adapter.has('navigation.openSession')).toBe(false)
-    expect(adapter.openSession('s-5').status).toBe('unavailable')
-    expect(warn.mock.calls[0][0]).toContain('openSession unavailable')
+    expect(adapter.openSession('s1')).toEqual({ status: 'unavailable', reason: 'no uiWorkspace.openSession capability' })
+    expect(() => adapter.sessions.open?.('s1')).toThrow('sessions.open is unavailable')
+    expect(oldOpen).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledOnce()
   })
-})
 
-describe('defineAdapter — 0.1.6-alpha.2 会话面投影', () => {
-  it('provideInfo：binding + uiSession.adapter.bindingSource 补出输入面', () => {
+  it('resolves late uiWorkspace arrival and rejects calls after its capability disappears', () => {
+    const services: Record<string, unknown> = { sessions: { list: makeList() } }
+    const adapter = defineAdapter(makeContext(services), { onWarn: makeWarn() })
+    expect(adapter.has('navigation.openSession')).toBe(false)
+    expect(adapter.openSession('s1').status).toBe('unavailable')
+    const uiWorkspace = { openSession: vi.fn() }
+    services.uiWorkspace = uiWorkspace
+    expect(adapter.has('navigation.openSession')).toBe(true)
+    adapter.sessions.open?.('s1')
+    expect(uiWorkspace.openSession).toHaveBeenCalledWith('s1')
+    expect(uiWorkspace.openSession.mock.instances[0]).toBe(uiWorkspace)
+    services.uiWorkspace = undefined
+    expect(adapter.has('navigation.openSession')).toBe(false)
+    expect(() => adapter.sessions.open?.('s2')).toThrow('sessions.open is unavailable')
+  })
+
+  it('projects bindingSource input actions through the retained session reference', () => {
     const inputActions = { submit: vi.fn() }
     const binding = { sessionId: 's1' }
-    const source = makeLiveList({ key: 's1', props: { inputActions } })
-    const bindingSource = vi.fn(() => source)
+    const bindingSource = vi.fn(() => makeLiveList({ key: 's1', props: { inputActions } }))
     const adapter = defineAdapter(makeContext({
       sessions: { list: makeList(), binding: vi.fn(() => binding) },
-      uiSession: { adapter: { bindingSource, current: makeLiveList({ key: 's1' }) } },
+      uiSession: { adapter: { bindingSource } },
     }))
-
-    expect(adapter.migrations).toContain('sessions:provide-info-bridge')
     expect(adapter.has('sessions.provideInfo')).toBe(true)
     expect(adapter.sessions.provideInfo?.('s1')).toEqual({ props: { inputActions } })
     expect(bindingSource).toHaveBeenCalledWith({ sessionId: 's1', binding })
   })
 
-  it('provideInfo：未被保留（binding 缺席）的会话诚实回报不可用', () => {
-    const bindingSource = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList(), binding: vi.fn(() => undefined) },
-      uiSession: { adapter: { bindingSource, current: makeLiveList({ key: undefined }) } },
-    }))
+  it('does not revive the removed uiSession.adapter.resolve API', () => {
+    const resolve = vi.fn(() => ({ props: { inputActions: {} } }))
+    const adapter = defineAdapter(makeContext({ sessions: { binding: vi.fn(() => ({})) }, uiSession: { adapter: { resolve } } }))
+    expect(adapter.sessions.provideInfo?.('s1')).toBeUndefined()
+    expect(resolve).not.toHaveBeenCalled()
+  })
 
+  it('returns unavailable for unretained sessions and transient binding failures', () => {
+    const bindingSource = vi.fn()
+    const binding = vi.fn(() => undefined)
+    const adapter = defineAdapter(makeContext({ sessions: { binding }, uiSession: { adapter: { bindingSource } } }))
+    expect(adapter.sessions.provideInfo?.('s1')).toBeUndefined()
+    binding.mockImplementationOnce(() => {
+      throw new Error('released')
+    })
     expect(adapter.sessions.provideInfo?.('s1')).toBeUndefined()
     expect(bindingSource).not.toHaveBeenCalled()
   })
 
-  it('current 投影：核心快照缺 current 时由 uiSession.adapter.current 补齐', () => {
+  it('keeps current projection snapshots stable and fans out subscriptions with disposal', () => {
     const list = makeLiveList<Record<string, unknown>>({ ids: ['s1'], byId: {} })
     const current = makeLiveList<{ key?: string }>({ key: 's1' })
-    const adapter = defineAdapter(makeContext({
-      sessions: { list },
-      uiSession: { adapter: { bindingSource: vi.fn(), current } },
-    }))
-
-    expect(adapter.migrations).toContain('sessions:current-projection')
+    const adapter = defineAdapter(makeContext({ sessions: { list }, uiSession: { adapter: { current } } }))
     const projected = adapter.sessions.list
     expect(projected?.getSnapshot()).toEqual({ ids: ['s1'], byId: {}, current: 's1' })
-    // uSES 依赖 getSnapshot 引用稳定：同一份核心快照 + 同一个 current 必须返回同一对象
     expect(projected?.getSnapshot()).toBe(projected?.getSnapshot())
-    // list 投影本身也引用稳定（消费方按引用比较 / 作为订阅源）
     expect(adapter.sessions.list).toBe(projected)
-
-    // 订阅扇出：核心列表变化与 current 变化都要通知消费方
     const listener = vi.fn()
     const off = projected?.subscribe(listener)
     list.publish({ ids: ['s1', 's2'], byId: {} })
@@ -551,142 +442,52 @@ describe('defineAdapter — 0.1.6-alpha.2 会话面投影', () => {
     expect(projected?.getSnapshot()).toEqual({ ids: ['s1', 's2'], byId: {}, current: 's2' })
     off?.()
     current.publish({ key: 's3' })
+    list.publish({ ids: ['s3'] })
     expect(listener).toHaveBeenCalledTimes(2)
-
-    // 顶层别名与 list 同源：老写法读 sessions.getSnapshot 也拿到 current
-    expect(adapter.sessions.getSnapshot?.()).toEqual({ ids: ['s1', 's2'], byId: {}, current: 's3' })
+    expect(adapter.sessions.getSnapshot?.()).toEqual({ ids: ['s3'], current: 's3' })
   })
 
-  it('current 投影：创建期 uiSession 尚未激活，服务到达后仍补齐 current', () => {
-    const list = makeLiveList<Record<string, unknown>>({ ids: ['s1'], byId: {} })
-    const current = makeLiveList<{ key?: string }>({ key: undefined })
-    // `dsh-tauri-ui` 只声明 sessions，会早于 ui-session 激活：创建期读不到 uiSession 是常态
+  it('follows late uiSession current sources and replaces subscriptions when their owner changes', () => {
+    const list = makeLiveList({ ids: ['s1'] })
     const services: Record<string, unknown> = { sessions: { list } }
     const adapter = defineAdapter(makeContext(services))
-
-    expect(adapter.migrations).toContain('sessions:current-projection')
     const projected = adapter.sessions.list
-    const currentOf = (): unknown => (projected?.getSnapshot() as { current?: unknown } | undefined)?.current
-    expect(currentOf()).toBeUndefined()
-
-    // ui-session 稍后激活：投影在调用期重读服务，无需重建适配层
-    services.uiSession = { adapter: { bindingSource: vi.fn(), current } }
-    current.publish({ key: 's1' })
-    expect(currentOf()).toBe('s1')
-
-    // 订阅侧同样自愈：源到达前订阅，到达后 current 变化仍要通知消费方
+    expect(projected?.getSnapshot()).toEqual({ ids: ['s1'] })
     const listener = vi.fn()
     const off = projected?.subscribe(listener)
-    list.publish({ ids: ['s1', 's2'], byId: {} })
-    expect(listener).toHaveBeenCalledTimes(1)
+    const current = makeLiveList({ key: 's1' })
+    services.uiSession = { adapter: { current } }
+    list.publish({ ids: ['s1', 's2'] })
     current.publish({ key: 's2' })
     expect(listener).toHaveBeenCalledTimes(2)
-    expect(currentOf()).toBe('s2')
+    expect(projected?.getSnapshot()).toEqual({ ids: ['s1', 's2'], current: 's2' })
+    const replacement = makeLiveList({ key: 's3' })
+    services.uiSession = { adapter: { current: replacement } }
+    list.publish({ ids: ['s3'] })
+    current.publish({ key: 'obsolete' })
+    expect(listener).toHaveBeenCalledTimes(3)
+    replacement.publish({ key: 's4' })
+    expect(listener).toHaveBeenCalledTimes(4)
     off?.()
-    current.publish({ key: 's3' })
-    expect(listener).toHaveBeenCalledTimes(2)
+    replacement.publish({ key: 's5' })
+    expect(listener).toHaveBeenCalledTimes(4)
   })
 
-  it('provideInfo：创建期 uiSession 尚未激活，服务到达后桥照常解析', () => {
+  it('resolves late uiSession binding sources without rebuilding the adapter', () => {
     const inputActions = { submit: vi.fn() }
     const binding = { sessionId: 's1' }
-    const source = makeLiveList({ key: 's1', props: { inputActions } })
-    const services: Record<string, unknown> = {
-      sessions: { list: makeList(), binding: vi.fn(() => binding) },
-    }
+    const services: Record<string, unknown> = { sessions: { binding: vi.fn(() => binding) } }
     const adapter = defineAdapter(makeContext(services))
-
-    expect(adapter.migrations).toContain('sessions:provide-info-bridge')
-    expect(adapter.has('sessions.provideInfo')).toBe(true)
-    // 投影源未到达：诚实回报不可用，而不是抛错
     expect(adapter.sessions.provideInfo?.('s1')).toBeUndefined()
-
-    const bindingSource = vi.fn(() => source)
-    services.uiSession = { adapter: { bindingSource, current: makeLiveList({ key: 's1' }) } }
+    const bindingSource = vi.fn(() => makeLiveList({ props: { inputActions } }))
+    services.uiSession = { adapter: { bindingSource } }
     expect(adapter.sessions.provideInfo?.('s1')).toEqual({ props: { inputActions } })
     expect(bindingSource).toHaveBeenCalledWith({ sessionId: 's1', binding })
-  })
-
-  it('current 投影：0.1.5 布局（核心自带 current）不装投影，原样保留', () => {
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList({ ids: ['s1'], current: 's1' }) },
-      uiSession: { adapter: { current: makeList({ key: 's9' }) } },
-    }))
-
-    expect(adapter.migrations).not.toContain('sessions:current-projection')
-    expect(adapter.sessions.list?.getSnapshot()).toEqual({ ids: ['s1'], current: 's1' })
-  })
-
-  it('open 桥：0.1.6 布局下 sessions.open 由 uiWorkspace.openSession 补齐', () => {
-    const openSession = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList() },
-      uiWorkspace: { openSession },
-    }))
-
-    expect(adapter.migrations).toContain('sessions:open-bridge')
-    adapter.sessions.open?.('s1')
-    expect(openSession).toHaveBeenCalledWith('s1')
-  })
-
-  it('open 桥：创建期 uiWorkspace 尚未激活，服务到达后 sessions.open 照常切换', () => {
-    const openSession = vi.fn()
-    // `dsh-client-ui-workspace` 额外等 ui-session / connection，可能晚于本适配层创建：
-    // 创建期读不到 uiWorkspace 是常态，桥的安装判据不能依赖它。
-    const services: Record<string, unknown> = { sessions: { list: makeList() } }
-    const adapter = defineAdapter(makeContext(services))
-
-    expect(adapter.migrations).toContain('sessions:open-bridge')
-    expect(adapter.has('navigation.openSession')).toBe(false)
-    expect(adapter.openSession('s1').status).toBe('unavailable')
-
-    services.uiWorkspace = { openSession }
-    expect(adapter.has('navigation.openSession')).toBe(true)
-    adapter.sessions.open?.('s1')
-    expect(openSession).toHaveBeenCalledWith('s1')
-    expect(adapter.openSession('s2').status).toBe('opened')
-    expect(openSession).toHaveBeenCalledWith('s2')
-  })
-
-  it('open 桥：能力全缺时 sessions.open 明确抛错，不静默吞掉切换请求', () => {
-    const adapter = defineAdapter(makeContext({ sessions: { list: makeList() } }))
-
-    expect(adapter.migrations).toContain('sessions:open-bridge')
-    expect(() => adapter.sessions.open?.('s1')).toThrow(/sessions\.open is unavailable/)
-  })
-
-  it('open 桥：桥装好后核心才补上原生 sessions.open，原生优先于桥', () => {
-    const native = vi.fn()
-    // 服务延迟物化：装桥时核心还没有 open，之后才补上。
-    const sessions: Record<string, unknown> = { list: makeList() }
-    const adapter = defineAdapter(makeContext({ sessions }))
-
-    expect(adapter.migrations).toContain('sessions:open-bridge')
-    expect(() => adapter.sessions.open?.('s1')).toThrow(/sessions\.open is unavailable/)
-
-    sessions.open = native
-    expect(adapter.has('navigation.openSession')).toBe(true)
-    adapter.sessions.open?.('s2')
-    expect(native).toHaveBeenCalledWith('s2')
-  })
-
-  it('open 桥：原生 sessions.open 在场时不覆盖', () => {
-    const open = vi.fn()
-    const openSession = vi.fn()
-    const adapter = defineAdapter(makeContext({
-      sessions: { list: makeList(), open },
-      uiWorkspace: { openSession },
-    }))
-
-    expect(adapter.migrations).not.toContain('sessions:open-bridge')
-    adapter.sessions.open?.('s1')
-    expect(open).toHaveBeenCalledWith('s1')
-    expect(openSession).not.toHaveBeenCalled()
   })
 })
 
 describe('defineAdapter — official session APIs', () => {
-  it('create and catalog refresh capabilities bind only existing official methods', async () => {
+  it('binds existing official create, refresh and refreshProjections methods', async () => {
     const owner = {
       create: vi.fn(function (this: object, input?: unknown) {
         expect(this).toBe(owner)
@@ -697,20 +498,6 @@ describe('defineAdapter — official session APIs', () => {
         expect(this).toBe(owner)
         return Promise.resolve()
       }),
-    }
-    const adapter = defineAdapter(makeContext({ sessions: owner }))
-    expect(adapter.has('sessions.create')).toBe(true)
-    expect(adapter.has('sessions.refresh')).toBe(true)
-    await expect(adapter.sessions.create?.({ cwd: '/project' })).resolves.toBe('official-session')
-    await adapter.sessions.refresh?.()
-    expect(owner.refresh).toHaveBeenCalledOnce()
-    const unavailable = defineAdapter(makeContext({ sessions: {} }))
-    expect(unavailable.has('sessions.create')).toBe(false)
-    expect(unavailable.has('sessions.refresh')).toBe(false)
-  })
-
-  it('projection refresh capability binds only the official existing method', async () => {
-    const owner = {
       refreshProjections: vi.fn(function (this: object, id: string) {
         expect(this).toBe(owner)
         expect(id).toBe('session-a')
@@ -718,52 +505,46 @@ describe('defineAdapter — official session APIs', () => {
       }),
     }
     const adapter = defineAdapter(makeContext({ sessions: owner }))
+    expect(adapter.has('sessions.create')).toBe(true)
+    expect(adapter.has('sessions.refresh')).toBe(true)
     expect(adapter.has('sessions.refreshProjections')).toBe(true)
+    await expect(adapter.sessions.create?.({ cwd: '/project' })).resolves.toBe('official-session')
+    await adapter.sessions.refresh?.()
     await adapter.sessions.refreshProjections?.('session-a')
+    expect(owner.refresh).toHaveBeenCalledOnce()
     expect(owner.refreshProjections).toHaveBeenCalledOnce()
-    expect(defineAdapter(makeContext({ sessions: {} })).has('sessions.refreshProjections')).toBe(false)
+    const unavailable = defineAdapter(makeContext({ sessions: {} }))
+    expect(unavailable.has('sessions.create')).toBe(false)
+    expect(unavailable.has('sessions.refresh')).toBe(false)
+    expect(unavailable.has('sessions.refreshProjections')).toBe(false)
   })
-})
 
-describe('defineAdapter — sessionList 投影', () => {
-  it('sessionList：过滤非字符串 id、只带字符串 current，subscribe 转发到核心列表', () => {
-    const list = makeLiveList<{ ids: unknown[], current?: unknown }>({ ids: ['s1', 7, 's2', null], current: 's2' })
-    const adapter = defineAdapter(makeContext({ sessions: { list } }))
-
+  it('filters invalid ids and reads selected sessions from uiSession rather than the core catalog', () => {
+    const list = makeLiveList({ ids: ['s1', 7, 's2', null] })
+    const current = makeLiveList({ key: 's2' })
+    const adapter = defineAdapter(makeContext({ sessions: { list }, uiSession: { adapter: { current } } }))
     const projection = adapter.sessionList()
     expect(projection?.ids).toEqual(['s1', 's2'])
     expect(projection?.current).toBe('s2')
-
     const listener = vi.fn()
     const off = projection?.subscribe(listener)
-    list.publish({ ids: ['s3'], current: 's3' })
-    expect(listener).toHaveBeenCalledTimes(1)
+    current.publish({ key: 's3' })
+    list.publish({ ids: ['s3'] })
+    expect(listener).toHaveBeenCalledTimes(2)
     expect(adapter.sessionList()?.ids).toEqual(['s3'])
     expect(adapter.sessionList()?.current).toBe('s3')
     off?.()
-    list.publish({ ids: ['s4'], current: 's4' })
-    expect(listener).toHaveBeenCalledTimes(1)
-    expect(adapter.sessionList()?.ids).toEqual(['s4'])
+    list.publish({ ids: ['s4'] })
+    expect(listener).toHaveBeenCalledTimes(2)
   })
 
-  it('sessionList：快照非对象时按「无法判断」返回 undefined，ids 非数组时退化为空列表', () => {
-    const nullSnapshot = makeLiveList<unknown>(null)
-    expect(defineAdapter(makeContext({ sessions: { list: nullSnapshot } })).sessionList()).toBeUndefined()
-
-    const stringIds = makeLiveList<unknown>({ ids: 's1' })
-    expect(defineAdapter(makeContext({ sessions: { list: stringIds } })).sessionList())
-      .toEqual({ ids: [], subscribe: expect.any(Function) })
-
-    // current 只认字符串：非字符串一律当缺席，不猜一个结论
-    const numericCurrent = makeLiveList<unknown>({ ids: ['s1'], current: 42 })
-    expect(defineAdapter(makeContext({ sessions: { list: numericCurrent } })).sessionList())
-      .toEqual({ ids: ['s1'], subscribe: expect.any(Function) })
-  })
-
-  it('sessionList：核心没有 list 投影时返回 undefined', () => {
-    const adapter = defineAdapter(makeContext({ sessions: { getSnapshot: vi.fn() } }))
-
-    expect(adapter.has('sessions.list')).toBe(false)
-    expect(adapter.sessionList()).toBeUndefined()
+  it('treats invalid catalog snapshots and nonstring current keys as unprovable state', () => {
+    expect(defineAdapter(makeContext({ sessions: { list: makeList(null) } })).sessionList()).toBeUndefined()
+    expect(defineAdapter(makeContext({ sessions: { list: makeList({ ids: 's1' }) } })).sessionList()).toEqual({ ids: [], subscribe: expect.any(Function) })
+    const numeric = defineAdapter(makeContext({ sessions: { list: makeList({ ids: ['s1'] }) }, uiSession: { adapter: { current: makeList({ key: 42 }) } } }))
+    expect(numeric.sessionList()).toEqual({ ids: ['s1'], subscribe: expect.any(Function) })
+    const unavailable = defineAdapter(makeContext({ sessions: { getSnapshot: vi.fn() } }))
+    expect(unavailable.has('sessions.list')).toBe(false)
+    expect(unavailable.sessionList()).toBeUndefined()
   })
 })

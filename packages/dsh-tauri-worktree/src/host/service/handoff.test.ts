@@ -99,10 +99,7 @@ describe('handoff API', () => {
 
 describe('handoff.inherit', () => {
   it.each(['codex', 'claude'] as const)('preserves the official %s fork binding without injecting a desktop handoff message', async (backend) => {
-    const packageId: string = 'dsh-session-current'
-    const kernel = await import(packageId) as typeof import('@deepseek-ai/dsh-session') & {
-      appendPluginRecord: (value: Session, type: 'plugin:dsh-tauri-kernel/kernel', data: { backend: 'codex' | 'claude', nativeSessionId: string, sessionId: string }) => number
-    }
+    const kernel = await import('@deepseek-ai/dsh-session')
     const context = new Context()
     try {
       const sessions = new kernel.SessionStore(context)
@@ -699,19 +696,14 @@ describe('handoff.inherit', () => {
     expect(pendingWorktreeTitles.size).toBe(0)
   })
 
-  it('reads the log through the legacy fallbacks', async () => {
-    const legacy = [
-      { id: 'session-source', header: {}, log: conversationEvents },
-      { id: 'session-source', header: {}, events: conversationEvents },
-    ]
-    for (const session of legacy) {
-      const { created } = setup({ session })
+  it('does not seed inherited sessions from removed log or events properties', async () => {
+    for (const source of [{ log: conversationEvents }, { events: conversationEvents }]) {
+      const { created } = setup({ session: { id: 'session-source', header: {}, ...source } })
       expect(await handoff.inherit('session-source', 'session-target', 'C:/work')).toEqual({
-        ok: true,
-        targetSessionId: 'session-target',
-        seedLength: conversationEvents.length,
+        ok: false,
+        error: '源会话没有可继承的事件：session-source',
       })
-      expect(created[0]?.seed).toEqual(conversationEvents)
+      expect(created).toHaveLength(0)
     }
   })
 

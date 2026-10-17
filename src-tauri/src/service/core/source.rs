@@ -121,7 +121,7 @@ fn warn_unsupported_local_core(version: &str, baseline: Option<&str>) {
 /// 本地核心低于最低支持版本时不参与优先，一律回退预打包核心：内置插件是桌面壳的
 /// 组成部分，装上也无法加载，只会把启动卡在插件阶段（issue #596）。持久化的
 /// `active_core` 设置不改写——用户升级本地核心后自动恢复「本地优先」。
-pub fn active_source(app_handle: &AppHandle) -> CoreSource {
+pub fn active_source<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> CoreSource {
     let setting = config::get_store_dat_setting(app_handle);
     let local = local_core(app_handle);
     let baseline = config::manifest::minimum_dsh_version(app_handle);
@@ -225,38 +225,38 @@ mod tests {
 
     #[test]
     fn baseline_gate_accepts_equal_or_newer_versions() {
-        let baseline = "0.1.5-rc.1";
-        assert!(meets_baseline("0.1.5-rc.1", baseline));
-        assert!(meets_baseline("0.1.5-rc.2", baseline));
-        assert!(meets_baseline("0.1.6-alpha.2", baseline));
+        let baseline = "0.1.7-rc.1";
+        for version in ["0.1.7-rc.1", "0.1.7-rc.2", "0.1.7", "0.2.1-rc.1"] {
+            assert!(meets_baseline(version, baseline), "version={version}");
+        }
     }
 
-    /// issue #596：更早的核心（0.1.2-rc.1 / 0.1.0-rc.7）早于内置插件依赖的平台
-    /// 种子词，内置插件必然加载失败，不再支持。
     #[test]
     fn baseline_gate_rejects_older_versions() {
-        let baseline = "0.1.5-rc.1";
-        assert!(!meets_baseline("0.1.0-rc.7", baseline));
-        assert!(!meets_baseline("0.1.2-rc.1", baseline));
-        assert!(!meets_baseline("0.1.5-alpha.2", baseline));
+        let baseline = "0.1.7-rc.1";
+        for version in [
+            "0.1.0-rc.7",
+            "0.1.5-rc.1",
+            "0.1.6-alpha.2",
+            "0.1.6",
+            "0.1.7-alpha.1",
+            "0.1.7-beta.1",
+            "0.1.7-rc.0",
+        ] {
+            assert!(!meets_baseline(version, baseline), "version={version}");
+        }
     }
 
-    /// 版本不可解析（旧安装记录/异常清单）时不阻断：漏放行只是回到修复前的行为，
-    /// 误拦截会把可用的本地核心判死。
     #[test]
     fn baseline_gate_passes_unparsable_versions() {
-        assert!(meets_baseline("", "0.1.5-rc.1"));
-        assert!(meets_baseline("not-a-version", "0.1.5-rc.1"));
-        assert!(meets_baseline("0.1.0-rc.7", ""));
+        assert!(meets_baseline("", "0.1.7-rc.1"));
+        assert!(meets_baseline("not-a-version", "0.1.7-rc.1"));
+        assert!(meets_baseline("0.1.7-rc.1", ""));
     }
 
-    /// 清单缺失（读不到最低支持基线）时同样放行，避免资源损坏阻断本地核心。
     #[test]
     fn missing_baseline_keeps_local_core_usable() {
-        assert!(core_supports_bundled_plugins("0.1.0-rc.7", None));
-        assert!(!core_supports_bundled_plugins(
-            "0.1.0-rc.7",
-            Some("0.1.5-rc.1")
-        ));
+        assert!(core_supports_bundled_plugins("0.1.6", None));
+        assert!(!core_supports_bundled_plugins("0.1.6", Some("0.1.7-rc.1")));
     }
 }

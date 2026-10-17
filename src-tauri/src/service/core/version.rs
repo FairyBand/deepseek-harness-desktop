@@ -465,9 +465,9 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
             ));
         }
         stop_harness_for_core_switch(app_handle).await?;
-        let mut setting = config::get_store_dat_setting(app_handle);
-        setting.active_core = Some(CoreSource::Local.as_str().to_string());
-        config::set_store_dat_setting(app_handle, setting);
+        config::update_store_dat_setting(app_handle, |setting| {
+            setting.active_core = Some(CoreSource::Local.as_str().to_string());
+        });
         // 映射表记录「该依赖由系统环境满足」（`null`），与清单的 `Path | null` 语义一致。
         config::dependencies::record(app_handle, config::dependencies::DEP_DSH, None);
     } else if id == BUNDLED_CORE_ID {
@@ -480,22 +480,20 @@ pub async fn set_active(app_handle: &AppHandle, id: &str) -> Result<HarnessCore,
             return Err("CORE_BUNDLED_NOT_FOUND: bundled core files are missing".to_string());
         }
         stop_harness_for_core_switch(app_handle).await?;
-        let mut setting = config::get_store_dat_setting(app_handle);
-        setting.active_core = Some(CoreSource::App.as_str().to_string());
-        // 随包内核没有 pkg tag/commit：必须清掉下载版本留下的记录，否则版本展示与
-        // 「当前激活」判定仍指着那份已下载的核心。
-        setting.dsh_pkg_tag = None;
-        setting.dsh_pkg_commit = None;
-        config::set_store_dat_setting(app_handle, setting);
+        config::update_store_dat_setting(app_handle, |setting| {
+            setting.active_core = Some(CoreSource::App.as_str().to_string());
+            setting.dsh_pkg_tag = None;
+            setting.dsh_pkg_commit = None;
+        });
         config::dependencies::record(app_handle, config::dependencies::DEP_DSH, Some(bundled));
     } else if id == "app" {
         if !config::get_dsh_binary_path(app_handle).exists() {
             return Err("CORE_APP_NOT_FOUND: bundled core is not installed".to_string());
         }
         stop_harness_for_core_switch(app_handle).await?;
-        let mut setting = config::get_store_dat_setting(app_handle);
-        setting.active_core = Some(CoreSource::App.as_str().to_string());
-        config::set_store_dat_setting(app_handle, setting);
+        config::update_store_dat_setting(app_handle, |setting| {
+            setting.active_core = Some(CoreSource::App.as_str().to_string());
+        });
         // 切回预打包核心：托管根重新成为该依赖的安装根。
         record_managed_core(app_handle);
     } else if let Some(tag) = id.strip_prefix("app-") {
@@ -538,9 +536,9 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     // 激活目录已是目标版本（tag 相同）→ 仅切来源标记（如 local → app 同版本）
     if cur_tag.as_deref() == Some(tag) && config::get_dsh_binary_path(app_handle).is_file() {
         stop_harness_for_core_switch(app_handle).await?;
-        let mut setting = config::get_store_dat_setting(app_handle);
-        setting.active_core = Some(CoreSource::App.as_str().to_string());
-        config::set_store_dat_setting(app_handle, setting);
+        config::update_store_dat_setting(app_handle, |setting| {
+            setting.active_core = Some(CoreSource::App.as_str().to_string());
+        });
         return Ok(());
     }
     let target_dir = existing_slot_dir(app_handle, tag)
@@ -559,13 +557,13 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
                 None
             }
         };
-        let mut setting = config::get_store_dat_setting(app_handle);
-        setting.active_core = Some(CoreSource::App.as_str().to_string());
-        setting.dsh_pkg_tag = Some(tag.to_string());
-        if let Some(commit) = commit {
-            setting.dsh_pkg_commit = Some(commit);
-        }
-        config::set_store_dat_setting(app_handle, setting);
+        config::update_store_dat_setting(app_handle, |setting| {
+            setting.active_core = Some(CoreSource::App.as_str().to_string());
+            setting.dsh_pkg_tag = Some(tag.to_string());
+            if let Some(commit) = commit {
+                setting.dsh_pkg_commit = Some(commit);
+            }
+        });
         config::dependencies::record(app_handle, config::dependencies::DEP_DSH, Some(target_dir));
         return Ok(());
     }
@@ -670,13 +668,13 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
             None
         }
     };
-    let mut setting = config::get_store_dat_setting(app_handle);
-    setting.active_core = Some(CoreSource::App.as_str().to_string());
-    setting.dsh_pkg_tag = Some(tag.to_string());
-    if let Some(c) = commit {
-        setting.dsh_pkg_commit = Some(c);
-    }
-    config::set_store_dat_setting(app_handle, setting);
+    config::update_store_dat_setting(app_handle, |setting| {
+        setting.active_core = Some(CoreSource::App.as_str().to_string());
+        setting.dsh_pkg_tag = Some(tag.to_string());
+        if let Some(commit) = commit {
+            setting.dsh_pkg_commit = Some(commit);
+        }
+    });
     // 切换后的激活核心回到托管根；映射表随之写回，界面与解析链路保持一致。
     record_managed_core(app_handle);
     Ok(())

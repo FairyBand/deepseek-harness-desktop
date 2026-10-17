@@ -15,36 +15,16 @@ import { Panel } from '@/components/panel'
 import { queryKeys } from '@/config/query-keys'
 import { useInvalidateOnSettingUpdated } from '@/hooks/use-invalidate-on-setting-updated'
 import { store } from '@/store'
-import { useCoreBreakingConfirm } from '@/ui/config/hooks/use-core-breaking-confirm'
 import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { DownloadCoreDialog } from '@/ui/dialog/update-core'
 import { compareVersions, isCoreUnsupported, MIN_SUPPORTED_CORE_VERSION } from '@/utils/core-version'
 import { silence } from '@/utils/silence'
 import { toast } from '@/utils/toast'
 
-/**
- * 「核心」面板：管理 Harness 引擎来源与多版本。
- *
- * - 列表来自 `get_cores` 查询（`setting_updated` 事件一并失效刷新）：
- *   `local` = 用户通过 CLI 全局安装的本地核心（存在且不低于最低支持基线时优先使用，
- *   需求 3；低于基线时后端改用预打包核心，行内标注「不兼容」并给出更新提示）；
- *   `app-<tag>` = deepseek-harness-pkg 各发布版本（GitHub releases 拉取失败时
- *   降级为 git tags / 磁盘扫描，仅显示已下载版本）。预览版（Pre-release label
- *   或 tag 命名）照常列出、可下载安装，但带「预览版」标签、不参与更新提示。
- * - 切换核心：持久化后**自动重启**服务（需求 5），重启走 harness store 的
- *   restart 流程（停止 → 重新启动 → 健康检查）。升级到更新的版本时先弹「破坏性更改」
- *   警告，确认后把当前档案换成与目标版本配套的版本档案（缺失则新建），再切核心并重启。
- * - 下载版本：拉指定 tag 的发布资产到历史槽位（不激活），随后可切换；
- *   卸载仅允许非激活的已下载版本。
- * - 本地核心更新：通过用户包管理器 CLI（npm install -g @latest / pnpm add -g @latest）。
- * - 每行展示核心入口（cli path，超长省略号 + 限制宽度）。
- */
-
 export function ConfigCore() {
   const [dialogHolder, openDialog] = useOverlay(Modal, { type: 'holder' })
   const [downloadDialogHolder, openDownloadDialog] = useOverlay(DownloadCoreDialog, { type: 'holder' })
   const { holder: upgradeDialogHolder, guardCoreUpgrade } = useCoreProfileSwitch()
-  const { holder: coreBreakingHolder, confirmCoreBreaking } = useCoreBreakingConfirm()
 
   const { t } = useTranslation()
 
@@ -152,9 +132,6 @@ export function ConfigCore() {
       })
       return
     }
-    // 升级到更新的 dsh 版本 = 破坏性更改：先把当前档案换成配套档案，档案名默认取目标
-    // 版本的 x.x。该弹窗自带「切换」语义，命中时不再叠加一次普通的切换确认。
-    // 版本比对只用列表里已加载的在用核心，不为此联网重拉核心列表。
     const activeCore = cores.find(c => c.active)
     const guard = await guardCoreUpgrade(coreVersionKey(core), activeCore ? coreVersionKey(activeCore) : '')
     if (!guard)
@@ -212,10 +189,6 @@ export function ConfigCore() {
 
   async function onDownload(core: HarnessCore) {
     if (busy)
-      return
-    // rc.2 以上版本引入破坏性更改，可能影响第三方插件 → 下载前先弹出确认。
-    // 取消则中止，确认后继续；该提示与推荐版本逻辑无关，仅告知用户可随时切回 rc.2。
-    if (!(await confirmCoreBreaking(core.version)))
       return
     // 下载过程在对话框内展示进度 + 日志（复用 install-progress 事件流）；
     // 对话框 confirm（下载成功）或 cancel（失败后点关闭）都会结束本次等待。
@@ -299,16 +272,37 @@ export function ConfigCore() {
     }
   }
 
+  function showLocalUpdateWarning() {
+    toast(t('core.update_local_requires_app'), {
+      variant: 'warning',
+      description: t('core.update_local_requires_app_hint'),
+      timeout: 10_000,
+    })
+  }
+
   async function onUpdateLocal() {
     if (busy)
       return
+    if (localCore?.active) {
+      showLocalUpdateWarning()
+      return
+    }
     setBusyId('local')
     try {
       const version = await updateLocal.mutateAsync()
       await refetch()
-      toast(t('core.updated_toast', { version: version || '—' }), {})
+      toast(t('core.updated_toast', { version: version || '—' }), {
+        variant: 'success',
+        description: t('core.updated_switch_back_hint'),
+        timeout: 10_000,
+      })
     }
     catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message === 'CORE_LOCAL_UPDATE_REQUIRES_APP' || message.startsWith('CORE_LOCAL_UPDATE_REQUIRES_APP:')) {
+        showLocalUpdateWarning()
+        return
+      }
       console.error('[ConfigCore] update local core failed:', err)
       toast(t('core.update_failed'), {})
     }
@@ -494,7 +488,6 @@ export function ConfigCore() {
       {dialogHolder}
       {downloadDialogHolder}
       {upgradeDialogHolder}
-      {coreBreakingHolder}
     </div>
   )
 }
@@ -509,13 +502,6 @@ function coreVersionKey(core: HarnessCore): string {
   return core.version || core.tag
 }
 
-/**
- * 本地核心是否低于最低支持基线。判据与「不兼容版本」分组完全一致（同一基线，
- * `isUnsupportedCore`），低于基线时随包内置插件无法加载（issue #596），桌面端自动
- * 改用预打包核心。不可与推荐核心版本（`engines.dsh.recommend`）混用——后者只用于
- * 更新提示，拿它当基线会把「高于基线、低于推荐版本」的可用本地核心误判为不兼容
- * （推荐版本为 0.1.7-alpha.1 时，0.1.5-rc.3 就是这么被挡下的）。
- */
 function isUnsupportedLocal(core: HarnessCore): boolean {
   return core.source === 'local' && core.present && isUnsupportedCore(core)
 }

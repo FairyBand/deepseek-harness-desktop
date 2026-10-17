@@ -18,7 +18,7 @@ import { basename, join } from 'node:path'
 import process from 'node:process'
 import { finished } from 'node:stream/promises'
 import { describe, expect, it } from 'vitest'
-import { resolveDshCommand, resolveNodeBin, scaffoldDshProfile } from '../support/dsh'
+import { isolatedDshEnv, resolveDshCommand, resolveNodeBin, scaffoldDshProfile } from '../support/dsh'
 
 const EMBEDDED_ENV = 'DSH_TAURI_EMBEDDED'
 
@@ -104,9 +104,12 @@ async function startGateHost(): Promise<GateHost> {
 
   log(`🚀 挂载 [${basename(profile.home)}] carrier=${process.env[EMBEDDED_ENV] ?? '(unset)'}`)
 
+  const env = isolatedDshEnv(profile.home)
+  if (process.env[EMBEDDED_ENV] !== undefined)
+    env[EMBEDDED_ENV] = process.env[EMBEDDED_ENV]
   const child = spawn(resolveNodeBin(), args, {
     cwd: profile.profileDir,
-    env: { ...process.env, DSH_HOME: profile.home },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })

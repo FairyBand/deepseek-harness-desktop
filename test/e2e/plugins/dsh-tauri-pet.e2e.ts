@@ -225,7 +225,7 @@ describe('L2 客户端', () => {
       await openSettings(top.page, top.frame, top.syntheticFallbacks)
 
       const slots = await top.frame.evaluate(() => ({
-        hasTrigger: document.querySelector('[data-settings-trigger]') !== null,
+        hasTrigger: document.querySelector('[data-settings-trigger], [data-slot="settings.launcher"] button[aria-haspopup]') !== null,
         petSections: document.querySelectorAll('[id="dsh-tauri-pet-settings"]').length,
       }))
 

@@ -1,3 +1,8 @@
+import semver from 'semver'
+
+declare const __REMOTE_DSH_RECOMMEND__: string
+declare const __REMOTE_DSH_MINIMUM__: string
+
 export interface DshPkgReleaseMeta {
   tag: string
   prerelease: boolean
@@ -12,9 +17,16 @@ export interface ResolvedDshTag {
   notes: string[]
 }
 
-export const RECOMMENDED_DSH_VERSION = '0.2.0-rc.2'
+export const RECOMMENDED_DSH_VERSION = __REMOTE_DSH_RECOMMEND__
 
-export const FALLBACK_DSH_TAG = 'dsh-0.2.0-rc.2-36556493178'
+export const MINIMUM_DSH_VERSION = __REMOTE_DSH_MINIMUM__
+
+export const FALLBACK_DSH_TAG = 'dsh-0.2.1-rc.1-39009013600'
+
+export function assertSupportedDshVersion(version: string): void {
+  if (!semver.satisfies(version, `>=${MINIMUM_DSH_VERSION}`, { includePrerelease: true }))
+    throw new Error(`REMOTE_DSH_VERSION_UNSUPPORTED: DSH ${version || '(unknown)'} 不受支持，最低版本 ${MINIMUM_DSH_VERSION}；请先升级远端内核`)
+}
 
 export const OFFICIAL_INSTALL_REPO = 'https://github.com/deepseek-ai/deepseek-harness.git'
 

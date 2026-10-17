@@ -92,7 +92,7 @@ function fakeHost(overrides: Partial<HostFakes> = {}): HostFakes {
     test: async (): Promise<RemoteTestResult> => ({ ok: true, banner: 'Linux alpha' }),
     connect: async (machineId): Promise<{ machineId: MachineId, tunnelBaseUrl: string }> => ({ machineId, tunnelBaseUrl: 'http://127.0.0.1:45678' }),
     disconnect: async () => {},
-    install: async () => ({ installed: ['node'], dshRef: 'dsh-0.1.2-rc.1-1', dshVersion: '0.1.2-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true }),
+    install: async () => ({ installed: ['node'], dshRef: 'dsh-0.2.1-rc.1-39009013600', dshVersion: '0.2.1-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true }),
     events: (machineId, sinceSeq) => readEvents(machineId, sinceSeq),
     save: async () => {},
     remove: async () => {},
@@ -617,14 +617,14 @@ describe('ssh REST handlers', () => {
   })
 
   it('installs dsh on a machine and returns the outcome', async () => {
-    const install = vi.fn(async () => ({ installed: ['node'], dshRef: 'dsh-0.1.2-rc.1-1', dshVersion: '0.1.2-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true }))
+    const install = vi.fn(async () => ({ installed: ['node'], dshRef: 'dsh-0.2.1-rc.1-39009013600', dshVersion: '0.2.1-rc.1', dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', credentialsCopied: true }))
     installHost(fakeHost({ install }))
     const reply = await call<RemoteInstallResponse>('POST', `${BASE}/machines/install`, { machineId: 'm1' })
     expect(reply.status).toBe(200)
     expect(reply.body).toEqual({
       installed: ['node'],
-      dshRef: 'dsh-0.1.2-rc.1-1',
-      dshVersion: '0.1.2-rc.1',
+      dshRef: 'dsh-0.2.1-rc.1-39009013600',
+      dshVersion: '0.2.1-rc.1',
       dshPath: '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js',
       credentialsCopied: true,
     })

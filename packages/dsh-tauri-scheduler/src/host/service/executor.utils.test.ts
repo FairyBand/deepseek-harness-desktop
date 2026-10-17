@@ -111,16 +111,16 @@ describe('waitForTurnStart', () => {
 })
 
 describe('summarizeRun', () => {
-  it('内核 0.1.2-rc.1 起改从 snapshotEvents 读日志，失败收尾不会被吞成成功', () => {
+  it('从 snapshotEvents 读日志，失败收尾不会被吞成成功', () => {
     const outcome = summarizeRun({ snapshotEvents: () => runEvents }, 1)
     expect(outcome).toEqual({ text: 'done', reason: failureReason })
     expect(decideRunOutcome({ started: true, timedOut: false, reason: outcome.reason }))
       .toEqual({ status: 'failed', error: { code: 'llm_error', message: 'boom' } })
   })
 
-  it('legacy 内核的 log / events 仍作兜底', () => {
+  it('不从已移除的 log / events 属性读取会话记录', () => {
     for (const session of [{ log: runEvents }, { events: runEvents }]) {
-      expect(summarizeRun(session, 1)).toEqual({ text: 'done', reason: failureReason })
+      expect(summarizeRun(session, 1)).toEqual({ text: '' })
     }
   })
 

@@ -27,7 +27,6 @@ export {
   Menu,
   Modal,
   Pill,
-  projectUserText,
   rankByName,
   ReadBlock,
   relativeTime,

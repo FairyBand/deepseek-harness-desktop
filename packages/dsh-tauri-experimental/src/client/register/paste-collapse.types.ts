@@ -30,7 +30,6 @@ export interface PasteOccurrence {
 }
 
 export interface PasteInputState {
-  draftRev?: number
   occurrences?: readonly PasteOccurrence[]
 }
 
@@ -41,8 +40,6 @@ export interface PasteInputStateSource {
 
 export interface PasteSessionInput {
   insertReference: (reference: PasteReferenceInsert, span: PasteTokenSpan) => boolean
-  /** `0.1.5-rc.x` 的动作面还没有 `captureInsertion`：壳自身的同义方法仍在（后者就是它 + draftRev）。 */
-  caretSpan?: () => { start: number, end: number }
   state: PasteInputStateSource
 }
 

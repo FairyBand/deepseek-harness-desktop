@@ -3,6 +3,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { HostContext, NativeEntry, PlatformLoader } from './types'
 import { Context } from '@deepseek-ai/cordis'
 import * as llmModule from '@deepseek-ai/dsh-llm'
+import * as sessionModule from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { getServerContext } from 'dsh-h3/utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,9 +11,6 @@ import * as zodModule from 'zod'
 import { apply } from './apply'
 import { resetRuntime, runtime } from './config/runtime'
 import { server } from './server'
-
-const packageId: string = 'dsh-session-current'
-const sessionModule = await import(packageId) as typeof import('@deepseek-ai/dsh-session')
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void

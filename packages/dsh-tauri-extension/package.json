@@ -34,6 +34,9 @@
     "dist",
     "skills"
   ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1"
+  },
   "dsh": {
     "client": {
       "inject": [

@@ -28,6 +28,7 @@ declare module 'vitest' {
     dshHome: string
     /** 已挂载的包名。 */
     dshMounted: string[]
+    dshCoreVersion: string
   }
 }
 
@@ -61,6 +62,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   project.provide('dshCookie', host.cookie)
   project.provide('dshHome', host.home)
   project.provide('dshMounted', [...host.mounted])
+  project.provide('dshCoreVersion', host.coreVersion)
 
   return async () => {
     await host.stop()

@@ -209,7 +209,10 @@ mod tests {
         assert_eq!(range_matches(">>>1.0.0", "0.2.0"), None);
         assert_eq!(range_matches("", "0.2.0"), None);
         assert_eq!(range_matches("^1.0.0", "not-a-version"), None);
-        assert_eq!(evaluate(&peers(&[("@deepseek-ai/dsh", "garbage")]), "0.2.0"), Some(true));
+        assert_eq!(
+            evaluate(&peers(&[("@deepseek-ai/dsh", "garbage")]), "0.2.0"),
+            Some(true)
+        );
     }
 
     #[test]
@@ -235,9 +238,18 @@ mod tests {
         });
         let merged = peers_from_manifest(&manifest);
         assert_eq!(merged.len(), 3);
-        assert_eq!(merged.get("@deepseek-ai/dsh-llm").map(String::as_str), Some("^0.1.7-rc.1"));
-        assert_eq!(merged.get("@deepseek-ai/dsh-fs").map(String::as_str), Some("^0.1.0"));
-        assert_eq!(merged.get("@deepseek-ai/dsh").map(String::as_str), Some("^0.2.0"));
+        assert_eq!(
+            merged.get("@deepseek-ai/dsh-llm").map(String::as_str),
+            Some("^0.1.7-rc.1")
+        );
+        assert_eq!(
+            merged.get("@deepseek-ai/dsh-fs").map(String::as_str),
+            Some("^0.1.0")
+        );
+        assert_eq!(
+            merged.get("@deepseek-ai/dsh").map(String::as_str),
+            Some("^0.2.0")
+        );
         assert!(!merged.contains_key("dshmarket"));
         assert!(!merged.contains_key("@deepseek-ai/other"));
         assert!(is_dsh_package("@deepseek-ai/dsh"));

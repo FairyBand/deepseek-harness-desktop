@@ -4,7 +4,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { NativeSession } from '../backends/types'
-import type { HostContext, PlatformLoader, RuntimeModules } from '../types'
+import type { HostContext, PlatformLoader } from '../types'
 import type { DetectedCommand } from '../utils/detection'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -15,6 +15,7 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import * as llmModule from '@deepseek-ai/dsh-llm'
 import { PermissionPresetService } from '@deepseek-ai/dsh-permission-presets'
+import * as sessionModule from '@deepseek-ai/dsh-session'
 import { assertContiguous, materializeAppendBatch, materializeCreateHeader, SessionPersistence, SessionPersistenceRevision, validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
@@ -35,8 +36,6 @@ vi.mock('../utils/detection', () => ({ detectBackend: vi.fn() }))
 vi.mock('../backends/codex', () => ({ createCodexSession: vi.fn() }))
 vi.mock('../backends/claude', () => ({ createClaudeSession: vi.fn() }))
 
-const packageId: string = 'dsh-session-current'
-const sessionModule = await import(packageId) as typeof import('@deepseek-ai/dsh-session') & Pick<RuntimeModules, 'appendPluginRecord' | 'pluginRecordOf'>
 const require = createRequire(import.meta.url)
 const coreRequire = createRequire(require.resolve('@deepseek-ai/dsh-agent-loop'))
 const { sessionFormatCatalog } = await import(pathToFileURL(coreRequire.resolve('@deepseek-ai/dsh-session-format-catalog')).href)

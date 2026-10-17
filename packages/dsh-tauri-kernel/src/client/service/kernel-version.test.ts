@@ -7,12 +7,14 @@ const codex = (patch: Partial<BackendDetection> = {}): BackendDetection => ({ id
 
 describe('kernel core version gate', () => {
   it.each([
+    ['0.1.7-rc.1', false],
     ['0.2.0', false],
     ['0.2.1-alpha.1', false],
     ['0.2.1-alpha.2', true],
     ['0.2.1-alpha.2+build.7', true],
     ['0.2.1-alpha.10', true],
     ['0.2.1-beta.1', true],
+    ['0.2.1-rc.1', true],
     ['0.2.1', true],
     ['0.2.2-alpha.1', true],
     ['0.3.0-alpha.1', true],

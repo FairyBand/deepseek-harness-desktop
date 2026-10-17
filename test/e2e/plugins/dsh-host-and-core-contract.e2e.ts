@@ -136,6 +136,7 @@ describe('编排骨架', () => {
   })
 
   it('验证 DSH_E2E_MOUNT=cli 走真实 CLI 挂载路径', async () => {
+    const previous = process.env.DSH_E2E_MOUNT
     process.env.DSH_E2E_MOUNT = 'cli'
     try {
       // 只验挂载落盘，不起宿主：`dsh plugin add` 的产物就是 profile 本身。
@@ -154,7 +155,10 @@ describe('编排骨架', () => {
       }
     }
     finally {
-      delete process.env.DSH_E2E_MOUNT
+      if (previous === undefined)
+        delete process.env.DSH_E2E_MOUNT
+      else
+        process.env.DSH_E2E_MOUNT = previous
     }
   })
 })

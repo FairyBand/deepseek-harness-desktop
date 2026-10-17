@@ -1,4 +1,5 @@
 pub(crate) fn verify() -> Result<(), String> {
+    crate::config::e2e_app_data_dir()?;
     #[cfg(windows)]
     {
         let level = process_integrity_level()
@@ -128,6 +129,130 @@ mod tests {
         let cache = scratch.path().join("unused-cache");
         let _app = initialize_http(&cache).unwrap();
         assert!(!cache.exists(), "public asset HTTP created a cookie cache");
+    }
+
+    #[test]
+    fn e2e_startup_paths_are_isolated_and_invalid_roots_fail_closed() {
+        for mode in ["missing", "empty", "relative", "absolute"] {
+            let scratch = tempfile::tempdir().unwrap();
+            let home = scratch.path().join("home");
+            let local = home.join("AppData/Local");
+            let roaming = home.join("AppData/Roaming");
+            std::fs::create_dir_all(&local).unwrap();
+            std::fs::create_dir_all(&roaming).unwrap();
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "desktop::startup::tests::e2e_startup_paths_child",
+                    "--nocapture",
+                ])
+                .env("DSH_TEST_E2E_STARTUP_MODE", mode)
+                .env("DSH_TEST_E2E_SCRATCH", scratch.path())
+                .env("TAURI_WEBDRIVER_PORT", "4445")
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("LOCALAPPDATA", local)
+                .env("APPDATA", roaming)
+                .env("XDG_DATA_HOME", home.join(".local/share"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            match mode {
+                "missing" => {
+                    command.env_remove("DSH_E2E_HOME");
+                }
+                "empty" => {
+                    command.env("DSH_E2E_HOME", "");
+                }
+                "relative" => {
+                    command.env("DSH_E2E_HOME", "scratch");
+                }
+                _ => {
+                    command.env("DSH_E2E_HOME", scratch.path());
+                }
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000);
+            }
+            let mut child = command.spawn().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while child.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let _ = child.wait();
+                    panic!("E2E startup isolation did not return within 30 seconds: {mode}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "E2E startup isolation failed ({mode}): {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("E2E_STARTUP_PATHS_VERIFIED"));
+        }
+    }
+
+    #[test]
+    fn e2e_startup_paths_child() {
+        let Ok(mode) = std::env::var("DSH_TEST_E2E_STARTUP_MODE") else {
+            return;
+        };
+        let scratch = std::path::PathBuf::from(std::env::var_os("DSH_TEST_E2E_SCRATCH").unwrap());
+        let expected = scratch.join("app-data");
+        if mode != "absolute" {
+            assert_eq!(
+                verify().unwrap_err(),
+                "STARTUP_E2E_HOME_INVALID: DSH_E2E_HOME must be a non-empty absolute path"
+            );
+            assert_eq!(crate::logger::identifier_dir(), None);
+            assert!(!crate::config::force_xwayland_setting());
+            assert!(!expected.exists());
+        } else {
+            use tauri::Manager;
+            use tauri_plugin_store::StoreExt;
+
+            verify().unwrap();
+            let directory = crate::config::e2e_app_data_dir().unwrap().unwrap();
+            assert_eq!(directory, expected);
+            assert_eq!(crate::logger::identifier_dir(), Some(expected.clone()));
+            assert_eq!(crate::config::store_dat_file_name(), ".store.test.dat");
+            std::fs::create_dir_all(&expected).unwrap();
+            let user_store = br#"{"setting":{"force_xwayland":false}}"#;
+            for name in [".store.dat", ".store.dev.dat"] {
+                std::fs::write(expected.join(name), user_store).unwrap();
+            }
+            std::fs::write(
+                expected.join(".store.test.dat"),
+                br#"{"setting":{"force_xwayland":true}}"#,
+            )
+            .unwrap();
+            assert!(crate::config::force_xwayland_setting());
+            let mut context = mock_context(noop_assets());
+            context.config_mut().app.app_directories_override = Some(
+                tauri::utils::config::AppDirectoriesOverride::Root(directory),
+            );
+            let app = mock_builder()
+                .plugin(tauri_plugin_store::Builder::default().build())
+                .build(context)
+                .unwrap();
+            assert_eq!(app.path().app_data_dir().unwrap(), expected);
+            let store = app.store(crate::config::store_dat_file_name()).unwrap();
+            store.set("isolation_marker", serde_json::json!("e2e"));
+            store.save().unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(expected.join(".store.test.dat")).unwrap())
+                    .unwrap();
+            assert_eq!(saved["isolation_marker"], "e2e");
+            for name in [".store.dat", ".store.dev.dat"] {
+                assert_eq!(std::fs::read(expected.join(name)).unwrap(), user_store);
+            }
+        }
+        println!("E2E_STARTUP_PATHS_VERIFIED");
     }
 
     #[test]

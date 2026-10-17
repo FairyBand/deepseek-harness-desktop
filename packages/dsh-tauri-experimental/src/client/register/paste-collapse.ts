@@ -9,7 +9,7 @@ import { defineRegister } from 'dsh-tauri/client'
 import { PLUGIN_ID } from '../../shared/constants'
 import { PASTE_CHIP_SOURCE } from '../constants'
 import { locale } from '../locales'
-import { clipboardFileCount, isCollapsiblePaste, livePasteRefs, pasteChipTitle, resolveInsertionSpan, stalePasteRefs } from './paste-collapse.utils'
+import { clipboardFileCount, isCollapsiblePaste, livePasteRefs, pasteChipTitle, stalePasteRefs } from './paste-collapse.utils'
 
 /**
  * 大段粘贴（>500 字）折叠成官方引用 chip：编辑器里只留一枚 `首行… · N 字` 的 chip，
@@ -20,7 +20,6 @@ import { clipboardFileCount, isCollapsiblePaste, livePasteRefs, pasteChipTitle, 
  *   草稿投影、原生复制、持久化镜像都拿得到原文；模型侧由 codec.serialize 还原）；
  * - `ctx.conversation.input.for(actx)` 在光标处插入 chip（官方 picks 用的是同一条通路）；
  * - `sessions.provideInfo().props.inputActions.captureInsertion()` 取带修订号的选区快照
- *   （`0.1.5-rc.x` 的动作面还没有它，退回壳自身的 `caretSpan()` + `state.draftRev`）。
  *
  * 任何一环缺席都不接管：官方 paste 路径照常把原文插入编辑器（退级第 4 级），绝不吞掉粘贴。
  * 文本落点判定只认官方 `[data-composer-card]`。
@@ -96,7 +95,7 @@ export const pasteCollapseFeature = defineRegister<ClientContext>((controller, c
     const input = sessionInputOf(sessionId)
     if (input === undefined)
       return
-    const span = resolveInsertionSpan(sessions().provideInfo?.(sessionId)?.props?.inputActions, input)
+    const span = sessions().provideInfo?.(sessionId)?.props?.inputActions?.captureInsertion?.()
     if (span === undefined)
       return
 

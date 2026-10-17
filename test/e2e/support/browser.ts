@@ -47,13 +47,13 @@ export const PET_MENU_PATCHED = '[data-dsh-tauri-pet-menu-patched="1"]'
 /** dsh 内部结构（上游产物）：可用稳定结构性锚点。 */
 export const SIDEBAR = '[data-slot="sidebar"]'
 export const SIDEBAR_PANELLIST = '[data-slot="sidebar.panellist"]'
-export const SETTINGS_TRIGGER = '[data-settings-trigger]'
+export const SETTINGS_TRIGGER = '[data-settings-trigger], [data-slot="settings.launcher"] button[aria-haspopup]'
 export const SETTINGS_SIDEBAR = '[data-slot-sidebar="dsh-tauri-ui"]'
 export const SETTINGS_SECTION_SLOT = '[data-slot="settings.section"]'
 export const SETTINGS_NAV_ITEM = 'nav[aria-label] button'
 /** 壳层自有设置菜单（浏览器态）的条目：官方 primitives 的 portal Menu 条目。 */
 export const SETTINGS_MENU_ITEM = '[role="menuitem"]'
-export const SETTINGS_MENU_LABEL = /^(设置|Settings)$/
+export const SETTINGS_MENU_LABEL = /^(设置|Settings)/
 export const SETTINGS_CONTENT = '[data-slot="settings.content"]'
 export const SETTINGS_ONBOARDING = '[data-slot="settings.onboarding"]'
 export const COMPOSER_CARD = '[data-composer-card]'
@@ -532,7 +532,7 @@ async function dismissOneModal(
 
 /**
  * 确保帧内无阻塞弹层（可重入的闸）。
- * `discoveryMs` 只延长「尚未发现弹层」的启动观察期；发现并关闭后仍沿用 300ms 复核。
+ * 首次启动的每段引导都可能延迟挂载，关闭一段后重新开始发现窗口。
  */
 export async function dismissAppModals(
   page: Page,
@@ -545,12 +545,12 @@ export async function dismissAppModals(
   let discoveryDeadline = Math.min(deadline, Date.now() + discoveryMs)
   while (Date.now() < deadline) {
     if (await dismissOneModal(page, frame, fallbacks)) {
-      discoveryDeadline = Date.now()
+      discoveryDeadline = Math.min(deadline, Date.now() + discoveryMs)
       continue
     }
     await delay(300)
     if (await dismissOneModal(page, frame, fallbacks)) {
-      discoveryDeadline = Date.now()
+      discoveryDeadline = Math.min(deadline, Date.now() + discoveryMs)
       continue
     }
     if (Date.now() >= discoveryDeadline)
@@ -563,6 +563,9 @@ export async function dismissAppModals(
     + '（弹层一直没被点掉：检查它是否持续重挂，或点击被遮罩 / inert 吞掉）',
   )
 }
+
+/** 引导弹层里「改用 API Key」的入口（rc.1 账号包在凭据弹层前先渲染登录/API Key 二选一）。 */
+const API_KEY_ENTRY = /^(添加 API Key|Add API Key)$/
 
 /** 等「带凭据输入的 API Key 引导弹层」，返回它的 locator。 */
 export async function waitForCredentialModal(
@@ -579,13 +582,28 @@ export async function waitForCredentialModal(
     }
 
     if (await frame.locator(APP_MODAL).count() > 0) {
+      const apiKeyEntry = frame.locator(APP_MODAL).first().getByRole('button', { name: API_KEY_ENTRY })
+      if (await apiKeyEntry.count() > 0) {
+        await clickInFrame(page, apiKeyEntry.first(), fallbacks)
+        continue
+      }
       await dismissOneModal(page, frame, fallbacks)
     }
     else {
       await delay(300)
     }
   }
-  throw new Error('等待带凭据输入的 API Key 引导弹层超时')
+  const report = await describePageState(page, frame)
+  const dialogs = await frame.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="dialog"]')).map(dialog => ({
+      ariaModal: dialog.getAttribute('aria-modal'),
+      inputs: dialog.querySelectorAll('input,textarea').length,
+      text: (dialog.textContent ?? '').trim().slice(0, 160),
+    }))).catch(error => [`DIALOG_DUMP_FAILED ${(error as Error).message}`])
+  throw new Error(
+    `等待带凭据输入的 API Key 引导弹层超时（${timeoutMs}ms）\n`
+    + `--- 弹层现场 ---\ndialogs=${JSON.stringify(dialogs)}\n--- 失败现场 ---\n${report}`,
+  )
 }
 
 /**

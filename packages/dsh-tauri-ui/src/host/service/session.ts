@@ -273,7 +273,6 @@ function lastTurnEndKind(value: unknown): string | undefined {
   return typeof kind === 'string' ? kind : undefined
 }
 
-/** 内核 `Session` 的日志面逐版本漂移：`snapshotEvents()` 为准，`log` / `events` 仅作兜底。 */
 function sessionEvents(value: unknown): readonly unknown[] | undefined {
   if (typeof value !== 'object' || value === null)
     return undefined
@@ -284,9 +283,7 @@ function sessionEvents(value: unknown): readonly unknown[] | undefined {
     if (Array.isArray(snapshot))
       return snapshot
   }
-  if (Array.isArray(session.log))
-    return session.log
-  return Array.isArray(session.events) ? session.events : undefined
+  return undefined
 }
 
 /** 模型可见表面节点（`surface.nodes`）；内核缺这一面时恢复必须退化为人工提示。 */

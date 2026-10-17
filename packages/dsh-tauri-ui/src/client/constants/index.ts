@@ -36,14 +36,6 @@ export const HERO_WORKSPACE_PRIORITY = -1
  */
 export const NEW_SESSION_LABELS = ['新建会话', 'New session'] as const
 
-/**
- * 官方「未分组」分组行「+」的 aria-label（中英双语，逐字取自官方 ui-workspace 词典的
- * `actions.newSession.aria` 与 `group.ungrouped` 组合）。
- *
- * 0.1.7 起分组行带 `data-row-key`，优先按行键判定；此文案只作为 ≤0.1.6 的退化判据。
- */
-export const UNGROUPED_NEW_SESSION_LABELS = ['在“未分组”中新建会话', 'New session in Ungrouped'] as const
-
 /** 官方未分组分组行的行键：`workspace:` + 官方 `UNGROUPED_KEY`（后者为空串）。 */
 export const UNGROUPED_ROW_KEY = 'workspace:'
 

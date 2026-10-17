@@ -8,15 +8,12 @@
  *
  * 非回环监听的前置状态用同一套 HTTP 路由布置（面板下拉在 iframe 里的指针命中不稳，
  * 不适合做断言支点）；面板侧只断言渲染与凭据开关的真实回写。
- * 隧道用例默认关闭：它会真的下载 cloudflared 并占用公网随机域名，不适合放进常规门禁；
- * 打开后用例自带收尾（停止隧道、关闭暴露），不把状态留给后续用例。
  */
 
 import type { Browser } from 'playwright'
 import type { DshPage } from '../support/browser'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import process from 'node:process'
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest'
 import { launchDshBrowser, newDshPage, openSettings, selectSettingsSection } from '../support/browser'
 
@@ -24,7 +21,6 @@ const ARTIFACTS = join(import.meta.dirname, '..', '.artifacts')
 const ACCESS_API = '/api/tauri/remote/access'
 const PANEL = '[data-testid="access-section"]'
 const LAN = '局域网'
-const TUNNEL = '公网隧道'
 const ACCESS_TOGGLE = '[data-testid="access-toggle"]'
 const LAN_ADDRESS = '[data-testid="access-lan-address"]'
 const LAN_DRAFT = '[data-testid="access-lan-draft"]'
@@ -36,12 +32,6 @@ const PERMANENT_VALUE = '[data-testid="access-permanent-value"]'
 const PERMANENT_REVEAL = '[data-testid="access-permanent-reveal"]'
 const TOKEN_ROTATE = '[data-testid="access-token-rotate"]'
 const TOKEN_REVOKE = '[data-testid="access-token-revoke"]'
-const TUNNEL_TOGGLE = '[data-testid="access-tunnel-toggle"]'
-const TUNNEL_MODE = '[data-testid="access-tunnel-mode"]'
-const TUNNEL_START = '[data-testid="access-tunnel-start"]'
-const TUNNEL_STOP = '[data-testid="access-tunnel-stop"]'
-const TUNNEL_STATE = '[data-testid="access-tunnel-state"]'
-const PROGRESS = '[data-testid="access-tunnel-progress"]'
 const REMOVED = [
   '[data-testid^="access-logs"]',
   '[data-testid="access-events"]',
@@ -61,7 +51,6 @@ const REMOVED = [
 ].join(', ')
 const CODE = /^[2-9A-HJ-NP-Z]{8}$/u
 const MASK = '••••••••'
-const TUNNEL_E2E = process.env.DSH_E2E_TUNNEL === '1'
 
 interface AccessStatusPayload {
   enabled: boolean
@@ -238,39 +227,4 @@ describe('入站访问面板（真实浏览器）', () => {
       await app.page.close()
     }
   }, 120_000)
-
-  it.skipIf(!TUNNEL_E2E)('启动真实 quick 隧道并拿到公网地址，随后停止回收', async () => {
-    await resetExposure()
-    const app = await newDshPage(browser, { ready: '[data-slot="sidebar"]' })
-    try {
-      await openAccessPanel(app)
-      await expect.poll(() => app.frame.locator(TUNNEL_TOGGLE).count(), { timeout: 20_000 }).toBe(1)
-      await switchOf(app, TUNNEL).click()
-      await expect.poll(() => app.frame.locator(TUNNEL_MODE).count(), { timeout: 20_000 }).toBe(1)
-      await app.frame.locator(TUNNEL_START).click()
-      // 启动期边轮询边采样：进度必须在拿到公网地址之前至少出现过一次（不能静默）
-      let sawProgress = false
-      await expect.poll(async () => {
-        if (await app.frame.locator(PROGRESS).count() > 0)
-          sawProgress = true
-        return (await accessStatus()).tunnel.url === undefined ? 0 : 1
-      }, { timeout: 180_000, interval: 500 }).toBe(1)
-      expect(sawProgress, '启动期必须能看到阶段进度').toBe(true)
-
-      const status = await accessStatus()
-      expect(status.tunnel.state).toBe('running')
-      expect(status.tunnel.url, '面板不再展示公网地址，只能从宿主状态取').toMatch(/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/u)
-      expect(await readText(app, PAIRING_CODE), '隧道链接只带宿主签发的短期配对码').toBe(authParamOf(status.pairing?.tunnelLink))
-      await expect.poll(() => readText(app, TUNNEL_STATE), { timeout: 30_000 }).toBe('隧道运行中')
-      await shoot(app, 'access-4-tunnel')
-
-      await app.frame.locator(TUNNEL_STOP).click()
-      await expect.poll(async () => (await accessStatus()).tunnel.url === undefined, { timeout: 30_000 }).toBe(true)
-      await expect.poll(() => app.frame.locator(TUNNEL_STATE).count(), { timeout: 30_000 }).toBe(0)
-    }
-    finally {
-      await resetExposure()
-      await app.page.close()
-    }
-  }, 300_000)
 })

@@ -4,6 +4,7 @@ import { PLUGIN_ID } from '../constants'
 const zh = {
   extension: '插件扩展',
   pluginsTab: '插件',
+  pluginsBack: '回退',
   skillsTab: '技能',
   mcpTab: 'MCP',
   marketTab: '市场',
@@ -121,6 +122,7 @@ type LocaleKey = keyof typeof zh
 const en: Record<LocaleKey, string> = {
   extension: 'Plugin Extensions',
   pluginsTab: 'Plugins',
+  pluginsBack: 'Back',
   skillsTab: 'Skills',
   mcpTab: 'MCP',
   marketTab: 'Market',

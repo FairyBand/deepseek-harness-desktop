@@ -6,7 +6,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import type { ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type { AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import type { NativeSession, NativeSink } from '../backends/types'
-import type { HostContext, NativeExecution, PlatformLoader, RuntimeModules } from '../types'
+import type { HostContext, NativeExecution, PlatformLoader } from '../types'
 import type { OfficialSink } from './sink.types'
 import { createRequire } from 'node:module'
 import process from 'node:process'
@@ -15,6 +15,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop'
 import * as llmModule from '@deepseek-ai/dsh-llm'
+import * as sessionModule from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { ApprovalService } from '@deepseek-ai/dsh-user-approval'
@@ -30,8 +31,6 @@ import { identity } from './identity'
 import { session as bridgeSession } from './session'
 import { sink } from './sink'
 
-const currentPackage: string = 'dsh-session-current'
-const sessionModule = await import(currentPackage) as unknown as typeof import('@deepseek-ai/dsh-session') & Required<Pick<RuntimeModules, 'appendPluginRecord' | 'pluginRecordOf'>>
 const require = createRequire(import.meta.url)
 const loopRequire = createRequire(require.resolve('@deepseek-ai/dsh-agent-loop'))
 const promptModule: { SystemPrompt: new (ctx: Context, options: { includeHarnessIdentity: boolean, includeRuntimeContext: boolean }) => Context['systemPrompt'] } = await import(pathToFileURL(loopRequire.resolve('@deepseek-ai/dsh-system-prompt')).href)

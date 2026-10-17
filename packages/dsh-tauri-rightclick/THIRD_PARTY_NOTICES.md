@@ -3,21 +3,23 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Version: `dsh-v0.2.1-alpha.1`
-- Revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`
+- Reference version: `dsh-v0.2.1-rc.1`
+- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
+- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
 - Source: `source/deepseek-harness`
-- Catalog pin: `dsh:` → `0.2.1-alpha.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the native-style context menu is this repo's own feature; where an action exists officially it is delegated to the official implementation first, with the plugin's own path as fallback.
 
 Integration points:
 
 - Official primitives popovers: menus and toasts run on the official primitives `Menu`; the plugin adds host capabilities and extra items (`src/client/register/context-menu.tsx:46`), and shortcut hints reuse the official menu item shape that accepts `ReactNode` (`context-menu.tsx:32`).
-- Official actions first: rename, archive and fork call the official implementation with the service instance as receiver and fall back only when unavailable (`src/client/service/menu.ts:43,63,102,111`); pinning is offered only when the kernel provides it (0.1.7+), older kernels hide the entry (`menu.ts:77,90`).
+- Official actions first: rename, archive and fork call the official implementation with the service instance as receiver and fall back only when unavailable (`src/client/service/menu.ts:43,63,102,111`); pinning consumes the official pinned-session capability in the supported `0.1.7-rc.1` and later core family (`menu.ts:77,90`).
 - Official menu/row location: menu items and inline row action buttons are located through their official text and ARIA shape (`src/client/register/official-menu.ts:8`, `src/client/register/locate.ts:40,107`), including the official React-rendered action button that appears after hover.
 - Official service surface: `src/client/types/index.ts:21,29,33` extends the official sessions / workspaces services with the capabilities this menu needs (`open` was removed in kernel 0.1.7 and is restored by the adapter compat bridge; the pinned-session set exists from 0.1.7).
 
-## Compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
+## Historical compatibility `0.2.0-rc.2` → `0.2.1-alpha.1`
 
 - The workspace navigation change adds optional draft initialization to `startSession`; session open, archive, fork, pinning, and official primitives menu shapes used here remain compatible.
 

@@ -37,11 +37,11 @@ const PATCH_MARKER: &str = "dsh-tauri: composer stays usable for a session outsi
 /// `composer.workspace-less` 能力判据逐字一致，跨语言协议字面量）。
 const CAPABILITY_ATTRIBUTE: &str = "data-dsh-composer-cwd";
 
-/// 官方 inert 语句（锚点绑定 0.1.5-rc.1 / rc.2 的压缩后源码）。
 const INERT_ORIGINAL: &str = "const inert = sessionId === void 0 || hero && chipTitle === void 0;";
 
 /// 放宽后的语句：会话有 cwd 就不再算 inert。
-const INERT_PATCHED: &str = "const inert = sessionId === void 0 || hero && chipTitle === void 0 && cwd === void 0;";
+const INERT_PATCHED: &str =
+    "const inert = sessionId === void 0 || hero && chipTitle === void 0 && cwd === void 0;";
 
 /// 导出锚点的关键字（所在行的前导缩进随版本变化，不做硬编码）。
 const ANCHOR_KEYWORD: &str = "return module.exports;";
@@ -61,11 +61,9 @@ fn patch_source(source: &str) -> PatchOutcome {
     }
     let needs_relax = if source.contains(INERT_ORIGINAL) {
         true
-    }
-    else if source.contains(INERT_PATCHED) {
+    } else if source.contains(INERT_PATCHED) {
         false
-    }
-    else {
+    } else {
         return PatchOutcome::AnchorMissing;
     };
     let Some((line_start, indent)) = locate_return_module_exports(source) else {
@@ -90,7 +88,10 @@ fn patch_source(source: &str) -> PatchOutcome {
 /// 行首到关键字之间必须是纯空白，否则不是锚行（防御上游把该语句挪进表达式里）。
 fn locate_return_module_exports(source: &str) -> Option<(usize, &str)> {
     let match_start = source.find(ANCHOR_KEYWORD)?;
-    let line_start = source[..match_start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_start = source[..match_start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let indent = &source[line_start..match_start];
     if !indent.chars().all(|c| c == '\t' || c == ' ') {
         return None;
@@ -114,9 +115,7 @@ mod tests {
 
     /// 官方产物末尾片段（单 tab 缩进，与 renderer 补丁同一形状）。
     fn fixture() -> String {
-        format!(
-            "\t\t\t{INERT_ORIGINAL}\n\t\t\tconst heroWorkspaceRow = 1;\n\t\texports.apply = apply;\n\t\texports.inject = inject;\n\t\treturn module.exports;\n\t}}\n}});\n"
-        )
+        "\t\t\tconst inert = sessionId === void 0 || hero && chipTitle === void 0;\n\t\t\tconst heroWorkspaceRow = 1;\n\t\texports.apply = apply;\n\t\texports.inject = inject;\n\t\treturn module.exports;\n\t}\n});\n".into()
     }
 
     #[test]
@@ -166,7 +165,10 @@ mod tests {
 
     #[test]
     fn skips_when_anchor_missing() {
-        assert_eq!(patch_source("\t\t\tconst inert = 1;\n"), PatchOutcome::AnchorMissing);
+        assert_eq!(
+            patch_source("\t\t\tconst inert = 1;\n"),
+            PatchOutcome::AnchorMissing
+        );
         let no_return = format!("\t\t\t{INERT_ORIGINAL}\n");
         assert_eq!(patch_source(&no_return), PatchOutcome::AnchorMissing);
     }

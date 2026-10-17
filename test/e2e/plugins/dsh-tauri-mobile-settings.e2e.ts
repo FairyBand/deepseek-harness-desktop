@@ -11,8 +11,7 @@ afterAll(async () => {
 })
 
 const DIALOG = '[role="dialog"][aria-modal="true"][data-dsh-mobile-settings]'
-// Official current SettingsRoot uses settings.launcher; legacy puts settings.trigger inside its button.
-const LAUNCHER = '[data-slot="settings.launcher"] button[aria-haspopup="dialog"], button[aria-haspopup="dialog"]:has([data-slot="settings.trigger"])'
+const LAUNCHER = '[data-slot="settings.launcher"] button[aria-haspopup="dialog"]'
 
 async function openPhoneSettings(width: number, height: number) {
   const app = await newDshPage(browser, {
@@ -82,10 +81,14 @@ describe('mobile settings official host composition', () => {
       })), '触摸后恢复焦点不能留下浏览器默认框').toEqual({ outline: 'none', tap: 'rgba(0, 0, 0, 0)', keyboardFocus: false })
       await plus.tap()
       expect(await plus.evaluate(element => getComputedStyle(element).outlineStyle), '新会话图标触摸后也不能留下默认框').toBe('none')
-      await app.page.keyboard.press('Shift+Tab')
-      await toggle.focus()
-      expect(await toggle.evaluate(element => element.matches(':focus-visible')), '键盘导航仍须有可见焦点').toBe(true)
-      expect(await toggle.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('solid')
+      await expect.poll(() => app.frame.locator('[data-conversation-scroll]').count(), { message: '新会话必须先挂载会话区', timeout: 15_000 }).toBe(1)
+      for (let index = 0; index < 10 && !await toggle.evaluate(element => document.activeElement === element); index++)
+        await app.page.keyboard.press('Shift+Tab')
+      expect(await toggle.evaluate(element => ({
+        active: document.activeElement === element,
+        focusVisible: element.matches(':focus-visible'),
+        outline: getComputedStyle(element).outlineStyle,
+      })), '键盘导航仍须有可见焦点').toEqual({ active: true, focusVisible: true, outline: 'solid' })
 
       await app.page.emulateMedia({ reducedMotion: 'reduce' })
       await toggle.tap()
@@ -114,6 +117,20 @@ describe('mobile settings official host composition', () => {
       await app.page.emulateMedia({ reducedMotion: 'no-preference' })
       await app.frame.locator('[data-dsh-mobile-new-session]').tap()
       await expect.poll(() => app.frame.locator('[data-conversation-scroll]').count(), { message: '必须在真实会话区验证手势，而非插件面板' }).toBe(1)
+      await expect.poll(
+        () => app.frame.evaluate(async () => {
+          const target = document.elementFromPoint(80, 220)
+          if (!target?.closest('[data-conversation-scroll]'))
+            return false
+          for (let frame = 0; frame < 3; frame++) {
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+            if (!target.isConnected || document.elementFromPoint(80, 220) !== target)
+              return false
+          }
+          return true
+        }),
+        { message: '真实会话内的手势落点必须跨渲染帧保持同一已连接节点' },
+      ).toBe(true)
       const center = app.frame.locator('[class$="_centerCol"]')
       const toggle = app.frame.locator('[data-dsh-mobile-sidebar-toggle]')
       const shade = app.frame.locator('[data-dsh-mobile-sidebar-shade]')
@@ -289,7 +306,16 @@ describe('mobile settings official host composition', () => {
           await expect.poll(() => dialog.getAttribute('data-dsh-mobile-settings-view')).toBe('detail')
         }
         await language.getByRole('button', { name: /^(?:中文|English)$/ }).click()
-        await menu.getByRole('menuitem', { name: '中文', exact: true }).click()
+        const [persistedLocale] = await Promise.all([
+          app.page.waitForResponse(async (response) => {
+            if (!response.url().endsWith('/api/settings/mutate'))
+              return false
+            const body = await response.json()
+            return body.result?.value?.ns === 'locale' && body.result.value.user?.preference === 'zh'
+          }),
+          menu.getByRole('menuitem', { name: '中文', exact: true }).click(),
+        ])
+        expect(await persistedLocale.json(), '关闭页面前必须确认宿主已接受中文写入，而非仅完成乐观 UI 更新').toMatchObject({ result: { ok: true, value: { ns: 'locale', user: { preference: 'zh' } } } })
         await expect.poll(() => language.getByRole('button', { name: '中文', exact: true }).count(), { message: '共享宿主语言偏好必须原生恢复，不能污染后续 shuffle 用例' }).toBe(1)
         await expect.poll(() => dialog.evaluate(el => document.getElementById(el.getAttribute('aria-labelledby')!)?.textContent?.trim())).toBe('设置')
         await dialog.locator('[data-dsh-mobile-settings-close]').click()

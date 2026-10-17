@@ -746,12 +746,6 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = crate::service::patch::workspace::apply(&app_handle) {
         log::warn!("workspace worktree membership patch failed: {e}");
     }
-    // 0.1.6-alpha.1 起 dsh-client-ui-workspace 的浏览视图 store 去掉了
-    // `sessionUpdatedAtByAccount`（persist key 仍是 dsh.workspace.view.v5）：先跑过新核心
-    // 再切回 0.1.5-rc.1 / rc.2 时，旧核心的 retainAccountKeys 会
-    // Object.entries(undefined) 抛错，sidebar.workspaces 整条槽崩掉且不会自愈。
-    // 补丁把该 action 的取值放宽为 `?? {}`，逐条独立判定：0.1.7 起上游第三条改成了
-    // `delete`，前两条的放宽仍然生效；只有该 action 被整体改写才安全跳过。
     if let Err(e) = crate::service::patch::workspace_view::apply(&app_handle) {
         log::warn!("workspace view state patch failed: {e}");
     }
@@ -1011,10 +1005,6 @@ pub(super) async fn launch_prepared(
     fs::create_dir_all(log_path.parent().unwrap_or(std::path::Path::new(".")))
         .map_err(|e| format!("LOG_DIR_MKDIR_FAILED: create log dir failed: {e}"))?;
     rotate_service_log(&log_path, 3);
-
-    // `dsh web` 默认在系统浏览器打开 UI；桌面端内嵌 WebView，不需要浏览器，
-    // 追加 `--no-open` 关闭。该标志自 0.1.0-rc.8 起提供，全部受支持核心（≥
-    // 0.1.5-rc.1）均已具备，无需按版本判定。
 
     // 补丁层悬空 insert 预检：手写的 `insert` 条目在包被卸载（市场会拒绝卸载
     // 「仍被用户补丁引用」的插件，用户于是改走手工删依赖 / pnpm remove）或本地

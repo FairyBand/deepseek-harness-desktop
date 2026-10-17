@@ -66,9 +66,12 @@ describe('tooling configuration contracts', () => {
     expect(pluginConfig.test).toEqual({
       name: 'plugin',
       include: ['test/e2e/plugins/**/*.e2e.ts'],
+      exclude: ['**/archive/**', '**/dist/**', '**/node_modules/**', '**/target/**'],
       globalSetup: ['./test/e2e/setup-plugin.ts'],
       environment: 'node',
       fileParallelism: false,
+      allowOnly: false,
+      retry: 0,
       testTimeout: 120_000,
       hookTimeout: 120_000,
     })

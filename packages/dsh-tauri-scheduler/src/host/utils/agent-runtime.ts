@@ -1,4 +1,4 @@
-import type { PlatformModuleLoader, SchedulerRuntimeModules, SetupAgentLike } from './agent-runtime.types'
+import type { PlatformModuleLoader, SchedulerRuntimeModules } from './agent-runtime.types'
 import { isFunction } from 'lodash-es'
 import { withSessionDeadline } from './session-deadline'
 
@@ -38,13 +38,6 @@ export async function isSchedulerSessionNotFound(loader: PlatformModuleLoader | 
   catch {
     return false
   }
-}
-
-export function resolveSetupAgent(
-  agentCtx: unknown,
-  createdAgent?: SetupAgentLike,
-): SetupAgentLike | undefined {
-  return createdAgent ?? (agentCtx as { agent?: SetupAgentLike } | undefined)?.agent
 }
 
 // --- internal ---

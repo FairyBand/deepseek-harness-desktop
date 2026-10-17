@@ -21,6 +21,14 @@ describe('community plugin presets', () => {
     ])
   })
 
+  it('keeps DSH Market unselected and ordered after Billion Context', () => {
+    const ids = presets.map(plugin => plugin.id)
+    expect(ids.indexOf('dshmarket')).toBeGreaterThan(ids.indexOf('billion-context'))
+    expect(presets.filter(plugin => plugin.id === 'dshmarket')).toMatchObject([
+      { spec: 'dshmarket', recommended: false, checked: false },
+    ])
+  })
+
   it.each([
     {
       id: '@changfenhuang/dsh-genui',

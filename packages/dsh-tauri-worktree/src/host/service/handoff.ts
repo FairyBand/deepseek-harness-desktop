@@ -189,7 +189,6 @@ async function createAgent(
   return { handle, seed: inheritedSeed }
 }
 
-/** 内核 0.1.2-rc.1 移除 events，旧版本以 log/events 兼容。 */
 function sessionEvents(value: unknown): readonly unknown[] {
   if (typeof value !== 'object' || value === null)
     return []
@@ -200,7 +199,5 @@ function sessionEvents(value: unknown): readonly unknown[] {
     if (Array.isArray(snapshot))
       return snapshot
   }
-  if (Array.isArray(session.log))
-    return session.log
-  return Array.isArray(session.events) ? session.events : []
+  return []
 }

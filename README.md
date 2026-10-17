@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" alt="DSH 0.2.0-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="Recommended DSH 0.2.1-rc.1" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="MIT License" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Downloads" />
@@ -77,9 +77,9 @@
 
 启动引导提供以下社区插件，可按需安装；
 
-- [DSH Market](https://github.com/dsh-market/dsh-market) — 社区插件市场
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — 按会话隔离的右编辑器侧栏
 - [Billion Context](https://github.com/ranxianglei/billion-context) — 上下文压缩与历史恢复
+- [DSH Market](https://github.com/dsh-market/dsh-market) — 社区插件市场
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — 对话回退与工作区备份
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM 渠道与机器人管理
 
@@ -134,8 +134,10 @@ Windows 启动失败时会通过原生对话框显示具体错误。若出现 `S
 
 | 当前基线 | 版本 |
 | --- | --- |
-| 推荐 Harness 内核 | `0.2.0-rc.2` |
-| 声明的内核最低版本 | `0.1.5-rc.1`，不保证所有兼容 |
+| 推荐 Harness 内核 | `0.2.1-rc.1` |
+| 支持的内核最低版本 | `0.1.7-rc.1`，不保证所有插件兼容 |
+
+更早内核不再支持；旧兼容记录仅保留历史事实，不代表当前支持范围。
 
 - 内核与预设选择遵循[资源清单](<./src-tauri/resources/manifest.jsonc>)及插件声明的版本范围；不保证任意最新上游版本都兼容。
 - 正式版默认启用 CLI 集成：Windows / macOS / Linux 自动更新 PATH。需重新打开终端，其他 shell 仍需要手动配置。

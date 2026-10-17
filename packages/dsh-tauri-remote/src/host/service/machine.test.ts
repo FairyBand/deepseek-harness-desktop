@@ -38,7 +38,7 @@ const config = {
   healthCheckTimeoutMs: 1000,
   healthPollIntervalMs: 5,
   healthPollAttempts: 3,
-  installRef: 'dsh-0.1.2-rc.1-33729514615',
+  installRef: 'dsh-0.2.1-rc.1-39009013600',
   installTimeoutMs: 60000,
   keepaliveIntervalMs: 10000,
   keepaliveCountMax: 3,
@@ -62,7 +62,7 @@ function stubGithub(): void {
 }
 
 /** A boot page whose manifest the bundle probe confirms. */
-const BOOT_HTML = '<html><body><script>globalThis["__DSH_BOOT__"] = {"entries":[{"url":"/plugins/@deepseek-ai/dsh-client-ui-layout/client.js"}]};</script></body></html>'
+const BOOT_HTML = '<html><body><script>globalThis["__DSH_BOOT__"] = {"release":{"version":"0.2.1-rc.1"},"entries":[{"url":"/plugins/@deepseek-ai/dsh-client-ui-layout/client.js"}]};</script></body></html>'
 
 /** The layout entry the pinned dsh release resolves: the remote shell expands $HOME (root user in the fake). */
 const ENTRY = '/root/.dsh-desktop/dependencies/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
@@ -95,6 +95,7 @@ class FakeSession implements RemoteSession {
   unameResult = 'Linux 6.8.0-45-generic x86_64\n'
   /** The check-script answer: one missing component per line (default: none). */
   missingResult = ''
+  dshVersion = '0.2.1-rc.1'
   /** When set, the plugin-sync apply command answers a non-zero code with this stderr. */
   pluginSyncError: Error | undefined
   /** The local port the fake tunnel reports. */
@@ -110,6 +111,8 @@ class FakeSession implements RemoteSession {
     const respond = (): RemoteExecResult => {
       if (this.connectError !== undefined)
         throw this.connectError
+      if (command.includes('REMOTE_DSH_PACKAGE'))
+        return { code: 0, stdout: this.missingResult.includes('dsh') ? 'REMOTE_DSH_MISSING' : JSON.stringify({ version: this.dshVersion }), stderr: '' }
       if (command === 'uname -srm') {
         return { code: 0, stdout: this.unameResult, stderr: '' }
       }
@@ -577,10 +580,12 @@ describe('sshManager', () => {
     await manager.connect(MachineId('m1'))
     const flow = bootstrapFlowCommands(session)
     expect(flow[0]).toContain('curl')
-    expect(flow[1]).toBe('uname -srm')
-    expect(flow[2]).toContain('echo node')
-    expect(flow[3]).toContain('dsh-remote.pid')
-    expect(flow[3]).toContain('--host 127.0.0.1')
+    expect(flow[1]).toContain('REMOTE_DSH_PACKAGE')
+    expect(flow[2]).toBe('uname -srm')
+    expect(flow[3]).toContain('echo node')
+    expect(flow[4]).toContain('REMOTE_DSH_PACKAGE')
+    expect(flow[5]).toContain('dsh-remote.pid')
+    expect(flow[5]).toContain('--host 127.0.0.1')
     expect(manager.status(MachineId('m1')).state).toBe('connected')
   })
 
@@ -789,9 +794,11 @@ describe('sshManager', () => {
       markProbeStarted = resolve
     })
     const session = new FakeSession(() => true)
-    session.exec = () => {
+    session.execGate = (command) => {
+      if (!command.includes('curl'))
+        return undefined
       markProbeStarted?.()
-      return gate.then(() => ({ code: 0, stdout: '200', stderr: '' }))
+      return gate
     }
     const { manager, events } = boot({ sessionFactory: () => session })
     const pending = manager.connect(MachineId('m1'))
@@ -1081,6 +1088,19 @@ describe('sshManager', () => {
 })
 
 describe('sshManager install', () => {
+  it.each(['0.1.2-rc.1', '0.1.7-rc.0', 'unknown'])('rejects existing unsupported runtime %s without installing, copying credentials, or launching', async (version) => {
+    const session = new FakeSession(() => false)
+    session.dshVersion = version
+    session.missingResult = 'node\n'
+    const { manager, transport } = boot({ sessionFactory: () => session, envCredentials: () => ({ apiKey: 'sk-test' }) })
+    await expect(manager.install(MachineId('m1'))).rejects.toMatchObject({ code: 'machine-install-failed', message: expect.stringContaining('REMOTE_DSH_VERSION_UNSUPPORTED') })
+    expect(session.commands.some(command => command.includes('trap cleanup EXIT'))).toBe(false)
+    expect(session.commands.some(command => command.includes('dsh-remote.pid'))).toBe(false)
+    expect(session.commands.some(command => command.includes('DEEPSEEK_API_KEY'))).toBe(false)
+    expect(transport.connectCalls).toBe(1)
+    expect(manager.status(MachineId('m1')).state).toBe('disconnected')
+  })
+
   it('installs dsh end-to-end, copies credentials, and auto-connects', async () => {
     let sessions = 0
     const factory = () => {
@@ -1097,19 +1117,21 @@ describe('sshManager install', () => {
     const result = await manager.install(MachineId('m1'))
     expect(result).toEqual({
       installed: ['node', 'dsh', 'pnpm'],
-      dshRef: 'dsh-0.1.2-rc.1-33729514615',
-      dshVersion: '0.1.2-rc.1',
+      dshRef: 'dsh-0.2.1-rc.1-39009013600',
+      dshVersion: '0.2.1-rc.1',
       dshPath: ENTRY,
       credentialsCopied: true,
     })
     const installSession = transport.sessions[0]!
     expect(installSession.commands[0]).toBe('uname -srm')
-    expect(installSession.commands[1]).toContain('echo node')
-    expect(installSession.commands[2]).toContain('https://nodejs.org/dist/')
-    expect(installSession.commands[3]).toContain('test -f')
-    expect(installSession.commands[4]).toContain('DEEPSEEK_API_KEY')
-    expect(installSession.options[2]!.timeoutMs).toBe(60000)
-    expect(typeof installSession.options[2]!.onData).toBe('function')
+    expect(installSession.commands[1]).toContain('REMOTE_DSH_PACKAGE')
+    expect(installSession.commands[2]).toContain('echo node')
+    expect(installSession.commands[3]).toContain('https://nodejs.org/dist/')
+    expect(installSession.commands[4]).toContain('test -f')
+    expect(installSession.commands[5]).toContain('REMOTE_DSH_PACKAGE')
+    expect(installSession.commands[6]).toContain('DEEPSEEK_API_KEY')
+    expect(installSession.options[3]!.timeoutMs).toBe(60000)
+    expect(typeof installSession.options[3]!.onData).toBe('function')
     await until(() => manager.status(MachineId('m1')).state === 'connected', 'auto-connect')
     expect(transport.connectCalls).toBe(2)
   })
@@ -1167,6 +1189,8 @@ describe('sshManager install', () => {
     session.exec = (command, _options) => {
       if (command.includes('grep -q \'^DEEPSEEK_API_KEY=\''))
         return Promise.resolve({ code: 1, stdout: '', stderr: 'disk full' })
+      if (command.includes('REMOTE_DSH_PACKAGE'))
+        return Promise.resolve({ code: 0, stdout: '{"version":"0.2.1-rc.1"}', stderr: '' })
       if (command === 'uname -srm')
         return Promise.resolve({ code: 0, stdout: session.unameResult, stderr: '' })
       return Promise.resolve({ code: 0, stdout: command.includes('test -f ') ? `${ENTRY}\n` : 'installed', stderr: '' })
@@ -1396,6 +1420,8 @@ describe('sshManager install', () => {
         // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- hostile rejection
         // eslint-disable-next-line prefer-promise-reject-errors -- deliberately non-Error: covers describeExecFailure's message tail
         return Promise.reject('disk full')
+      if (command.includes('REMOTE_DSH_PACKAGE'))
+        return Promise.resolve({ code: 0, stdout: '{"version":"0.2.1-rc.1"}', stderr: '' })
       if (command === 'uname -srm')
         return Promise.resolve({ code: 0, stdout: session.unameResult, stderr: '' })
       return Promise.resolve({ code: 0, stdout: command.includes('test -f ') ? `${ENTRY}\n` : 'installed', stderr: '' })
@@ -1443,6 +1469,8 @@ describe('sshManager install', () => {
   it('fails loud when the install finished but the entry is not present', async () => {
     const session = new FakeSession(() => false)
     session.exec = (command, _options) => {
+      if (command.includes('REMOTE_DSH_PACKAGE'))
+        return Promise.resolve({ code: 0, stdout: '{"version":"0.2.1-rc.1"}', stderr: '' })
       if (command === 'uname -srm')
         return Promise.resolve({ code: 0, stdout: session.unameResult, stderr: '' })
       if (command.includes('echo node'))
@@ -1603,6 +1631,8 @@ describe('sshManager install', () => {
     const session = new FakeSession(() => false)
     session.missingResult = 'node\n'
     session.exec = (command, _options) => {
+      if (command.includes('REMOTE_DSH_PACKAGE'))
+        return Promise.resolve({ code: 0, stdout: '{"version":"0.2.1-rc.1"}', stderr: '' })
       if (command === 'uname -srm')
         return Promise.resolve({ code: 0, stdout: session.unameResult, stderr: '' })
       if (command.includes('echo node'))
