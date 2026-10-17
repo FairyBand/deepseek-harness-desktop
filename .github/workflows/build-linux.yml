@@ -23,6 +23,8 @@ permissions:
 jobs:
   build:
     name: Build (linux-${{ matrix.arch }})
+    # 两个架构统一用 Ubuntu 22.04 构建，产物 GLIBC 符号上限 2.35（issue #1124）。
+    # ubuntu-22.04-arm 自 2026-09 起进入弃用期、2027-04-17 退休（runner-images#14254）。
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +32,7 @@ jobs:
           - arch: x64
             runner: ubuntu-22.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -100,6 +102,14 @@ jobs:
 
       - name: Normalize release asset names
         run: node scripts/rename-release-assets.mjs src-tauri/target/release/bundle/appimage src-tauri/target/release/bundle/deb
+
+      - name: Verify arm64 glibc ABI
+        if: matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          mapfile -d '' artifacts < <(find src-tauri/target/release/bundle/appimage src-tauri/target/release/bundle/deb -type f \( -name '*.AppImage' -o -name '*.deb' \) -print0)
+          [ "${#artifacts[@]}" -gt 0 ] || { echo '::error::no Linux arm64 artifacts were produced'; exit 1; }
+          bash scripts/check-linux-glibc-abi.sh --max 2.35 "${artifacts[@]}"
 
       - name: Upload build outputs
         uses: actions/upload-artifact@v6
