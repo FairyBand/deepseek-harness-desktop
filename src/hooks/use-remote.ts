@@ -29,8 +29,7 @@ function initialMachineId(): string | null {
   const label = getCurrentWindow().label
   if (label.startsWith('remote-'))
     return label.slice('remote-'.length) || null
-  const url = parameters.has('sessionId') ? parameters.get('iframeUrl') : null
-  return url && URL.canParse(url) ? new URL(url).origin : null
+  return null
 }
 
 export function useRemote() {

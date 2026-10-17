@@ -33,7 +33,7 @@ it('only offers a desktop window in the shell and targets the clicked session wi
   buildSessionMenu(composer, row, session, null, [])
   expect([...actions.keys()].slice(-2)).toEqual(['Open in new window', 'Refresh'])
   await actions.get('Open in new window')?.()
-  expect(invoke).toHaveBeenCalledWith('create_app_window', { sessionId: 'clicked', iframeUrl: window.location.origin })
+  expect(invoke).toHaveBeenCalledWith('create_app_window', { sessionId: 'clicked' })
   expect(open).not.toHaveBeenCalled()
   invoke.mockRejectedValue(new Error('WINDOW_CREATE_FAILED'))
   await expect(actions.get('Open in new window')?.()).rejects.toThrow('WINDOW_CREATE_FAILED')

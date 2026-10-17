@@ -1,5 +1,4 @@
 {
-  "session.open_failed": "无法加载指定会话，请重试或检查会话是否仍然存在",
   "app.wordmark": "HARNESS",
   "app.retry": "重试",
   "app.open_editor": "打开 DeepSeek Harness",

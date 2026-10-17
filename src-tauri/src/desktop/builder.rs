@@ -1185,6 +1185,7 @@ pub fn build_shell_window(
     label: String,
     title: &str,
     path: std::path::PathBuf,
+    navigation_script: Option<&str>,
 ) -> tauri::Result<tauri::WebviewWindow<Wry>> {
     let app_handle = app.clone();
 
@@ -1192,6 +1193,10 @@ pub fn build_shell_window(
         app,
         WebviewWindowBuilder::new(app, label, WebviewUrl::App(path)).title(title),
     )?;
+    let webview_builder = match navigation_script {
+        Some(script) => webview_builder.initialization_script_for_all_frames(script),
+        None => webview_builder,
+    };
 
     // 非 Windows 平台没有 WebView2 的 FrameCreated/ContentLoading 流程，兼容桥、
     // 通知桥、剪贴板图片桥、帧内日志桥与 boot 探测桥必须按窗口重新注入（与主窗口一致）。
@@ -1238,11 +1243,18 @@ pub fn build_extra_window(
     app: &tauri::AppHandle<Wry>,
     path: std::path::PathBuf,
     profile: &str,
+    navigation_script: Option<&str>,
 ) -> tauri::Result<tauri::WebviewWindow<Wry>> {
     let sequence = EXTRA_WINDOW_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
     let label = format!("window-{sequence}");
     crate::service::workflow::instances::bind_window(&label, profile);
-    let result = build_shell_window(app, label.clone(), crate::desktop::product_name(app), path);
+    let result = build_shell_window(
+        app,
+        label.clone(),
+        crate::desktop::product_name(app),
+        path,
+        navigation_script,
+    );
     if result.is_err() {
         crate::service::workflow::instances::release_window(&label);
     }

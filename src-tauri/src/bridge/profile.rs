@@ -166,7 +166,7 @@ mod tests {
             (
                 include_str!("../desktop/window.rs"),
                 "pub async fn create_app_window(",
-                "fn session_window_path(",
+                "pub fn quit_app(",
             ),
             (
                 include_str!("remote.rs"),

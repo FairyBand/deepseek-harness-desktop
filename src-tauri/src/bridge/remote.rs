@@ -225,12 +225,18 @@ pub async fn remote_open_window(
         .query_pairs_mut()
         .append_pair("remoteMachineId", &machine_id);
     let path = format!("index.html#{}", route.query().unwrap_or_default());
-    crate::desktop::builder::build_shell_window(&app_handle, label.clone(), &title, path.into())
-        .map(|_| ())
-        .inspect_err(|_| {
-            crate::service::workflow::instances::release_window(&label);
-        })
-        .map_err(|err| format!("REMOTE_WINDOW_FAILED: {err}"))
+    crate::desktop::builder::build_shell_window(
+        &app_handle,
+        label.clone(),
+        &title,
+        path.into(),
+        None,
+    )
+    .map(|_| ())
+    .inspect_err(|_| {
+        crate::service::workflow::instances::release_window(&label);
+    })
+    .map_err(|err| format!("REMOTE_WINDOW_FAILED: {err}"))
 }
 
 #[cfg(test)]

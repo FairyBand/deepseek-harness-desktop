@@ -139,7 +139,6 @@ export function buildSessionMenu(
   if (current && 'dshDesktop' in globalThis) {
     composer.add(locale.text('openInNewWindow'), () => invoke<void>('create_app_window', {
       sessionId: current.id,
-      iframeUrl: window.location.origin,
     }))
   }
   composer.add(locale.text('refresh'), reload, shortcutLabel('R'))

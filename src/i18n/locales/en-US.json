@@ -1,5 +1,4 @@
 {
-  "session.open_failed": "Could not load the selected session. Retry or check that it still exists",
   "app.wordmark": "HARNESS",
   "app.retry": "Retry",
   "app.open_editor": "Open DeepSeek Harness",

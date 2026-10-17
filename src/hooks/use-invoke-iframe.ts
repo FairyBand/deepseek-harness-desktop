@@ -77,7 +77,7 @@ export function useInvokeIframe(iframeRef: RefObject<HTMLIFrameElement | null>):
       return
     }
     const cmd = data.cmd
-    const args = cmd === 'create_app_window' ? { ...data.args, iframeUrl: origin } : data.args
+    const args = data.args
     const nonce = data.nonce ?? ''
 
     function reply(payload: { ok: boolean, value?: unknown, error?: string }) {

@@ -83,20 +83,14 @@ afterEach(() => {
 })
 
 describe('useRemote 查询、降级与启动寻址', () => {
-  it('session windows retain the target remote machine and can switch back to local', async () => {
+  it('会话窗口不再把 hash 里的 iframeUrl 当作远端机器来源', async () => {
     windowInfo.label = 'window-2'
     window.location.hash = new URLSearchParams({ sessionId: 'target', iframeUrl: 'http://127.0.0.1:4001/' }).toString()
     rows = [machineOf({ state: 'connected', tunnelBaseUrl: 'http://127.0.0.1:4001' })]
     const { result } = await ready()
-    await waitFor(() => expect(result.current.activeId).toBe('m1'))
-    expect(result.current.activeTunnelUrl).toBe('http://127.0.0.1:4001')
-    expect(connect).not.toHaveBeenCalled()
-    act(() => result.current.backToLocal())
-    await act(async () => {
-      await result.current.refresh()
-    })
     expect(result.current.activeId).toBeNull()
     expect(result.current.activeTunnelUrl).toBe('')
+    expect(connect).not.toHaveBeenCalled()
   })
 
   it('刷新失败保留列表并降级，恢复后可用', async () => {

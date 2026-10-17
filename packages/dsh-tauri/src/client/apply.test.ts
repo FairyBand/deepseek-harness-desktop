@@ -1,20 +1,14 @@
-/**
- * apply.test.ts — 装配入口的回归测试（broke-once 防线）。
- *
- * `5b3b9534` 重建时 `client/apply.ts` 连同四个注册器被整体删除，宿主侧发送方
- * （`src/layout/components/webview.tsx`、`iframe.tsx`）原地保留，结果「壳的收起侧边栏」
- * 等控件全部空转。这里锁住每条 effect 都被登记，且登记过程确实挂上了父窗口桥监听。
- */
 import type { ClientContext, ParentMessage } from './types'
+import { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { apply } from './apply'
+import { apply, inject } from './index'
 
 // effect 标签是 `ctx.effect` 的卸载日志标识：与 `client/apply.ts` 逐字一致。
 const EXPECTED_LABELS = [
   'dsh-tauri: appearance',
   'dsh-tauri: style (sidebar background)',
   'dsh-tauri: sidebar (toggle command + collapsed report)',
-  'dsh-tauri: navigation (new session, add workspace)',
+  'dsh-tauri: navigation (session target, new session, add workspace)',
   'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)',
   'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)',
   'dsh-tauri: account sign-in (auto-open the authorize url)',
@@ -52,8 +46,15 @@ function stubEnv(): Harness {
   const documentListeners = new Map<(event: KeyboardEvent) => void, string>()
   const sent: ParentMessage[] = []
   const parent = { postMessage: (message: ParentMessage) => sent.push(message) }
+  const storage = new Map<string, string>()
   vi.stubGlobal('window', {
     parent,
+    sessionStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value)
+      },
+    },
     addEventListener: (type: string, handler: (event: MessageEvent) => void) => windowListeners.set(handler, type),
     removeEventListener: (_type: string, handler: (event: MessageEvent) => void) => windowListeners.delete(handler),
   })
@@ -109,7 +110,7 @@ function stubEnv(): Harness {
   }
 }
 
-const disposers: (() => void)[] = []
+const disposers: (() => void | Promise<void>)[] = []
 
 /** 最小客户端 ctx：effect 按 cordis 的 `callback.call(fiber)` 语义绑定 this。 */
 function fakeCtx(labels: string[]): ClientContext {
@@ -121,6 +122,9 @@ function fakeCtx(labels: string[]): ClientContext {
       disposers.push(dispose)
       return dispose
     },
+    inject(_names: string[], callback: (scoped: ClientContext) => void) {
+      callback(ctx as unknown as ClientContext)
+    },
     layout: { toggleSidebar: () => {} },
     // 可选服务读取（`ctx.get`）与属性同源：老核心没有 `shortcuts`，属性面也不存在。
     get(name: string): unknown {
@@ -130,18 +134,90 @@ function fakeCtx(labels: string[]): ClientContext {
   return ctx as unknown as ClientContext
 }
 
+interface NavigationWindow {
+  __DSH_NAVIGATION__?: { sessionId?: unknown }
+}
+
+function injectSessionTarget(sessionId: string): void {
+  (window as unknown as NavigationWindow).__DSH_NAVIGATION__ = { sessionId }
+}
+
+function injectedSessionTarget(): unknown {
+  return (window as unknown as NavigationWindow).__DSH_NAVIGATION__
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
 })
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of disposers.splice(0))
-    dispose()
+    await dispose()
+  vi.restoreAllMocks()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 describe('apply', () => {
+  it('会话服务后到时仍能消费注入的目标会话，不创建新会话', async () => {
+    const env = stubEnv()
+    injectSessionTarget('target')
+    const ctx = new Context()
+    disposers.push(ctx.fiber.dispose)
+    const toggleSidebar = vi.fn()
+    ctx.provide('layout', { toggleSidebar })
+    ctx.provide('theme', {})
+    const bridge = await ctx.plugin({ inject, apply })
+    env.paint()
+    expect(env.sent).toContainEqual({ type: 'dsh://style', sidebar: null, marked: null, frame: null, colorScheme: 'light' })
+    env.dispatch({ type: 'dsh://sidebar:toggle' })
+    expect(toggleSidebar).toHaveBeenCalledTimes(1)
+    const openSession = vi.fn()
+    const create = vi.fn()
+    const startSession = vi.fn()
+
+    ctx.provide('sessions', {
+      list: { getSnapshot: () => ({ ids: ['target'] }), subscribe: vi.fn() },
+      create,
+    })
+    await bridge.await()
+    expect(injectedSessionTarget()).toBeUndefined()
+    ctx.provide('uiWorkspace', { openSession, startSession })
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(openSession.mock.calls).toEqual([['target']])
+    expect(create).not.toHaveBeenCalled()
+    expect(startSession).not.toHaveBeenCalled()
+  })
+
+  it('会话服务撤销再重建时不重复消费注入的目标会话', async () => {
+    const env = stubEnv()
+    injectSessionTarget('target')
+    const ctx = new Context()
+    disposers.push(ctx.fiber.dispose)
+    ctx.provide('layout', { toggleSidebar: vi.fn() })
+    ctx.provide('theme', {})
+    const sessions = { list: { getSnapshot: () => ({ ids: ['target'] }), subscribe: vi.fn() } }
+    const removeSessions = ctx.provide('sessions', sessions)
+    const openSession = vi.fn()
+    ctx.provide('uiWorkspace', { openSession })
+    const bridge = await ctx.plugin({ inject, apply })
+    expect(openSession).toHaveBeenCalledTimes(1)
+
+    await removeSessions()
+    ctx.provide('sessions', { ...sessions })
+    await bridge.await()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(openSession).toHaveBeenCalledTimes(1)
+
+    await bridge.dispose()
+    expect(env.windowListeners()).toBe(0)
+    expect(env.documentListeners()).toBe(0)
+    expect(env.styles).toEqual([])
+    expect(env.pendingFrames()).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('独立浏览器跳过桌面 effect，不拦截原生缩放快捷键', () => {
     const env = stubEnv()
     Object.defineProperty(window, 'parent', { value: window })
@@ -210,7 +286,7 @@ describe('apply', () => {
     expect(env.documentListeners()).toBe(2)
 
     for (const dispose of disposers.splice(0))
-      dispose()
+      await dispose()
     await vi.waitFor(() => {
       expect(env.windowListeners()).toBe(0)
       expect(env.documentListeners()).toBe(0)

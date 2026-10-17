@@ -1,29 +1,36 @@
-/**
- * register/navigation.test.ts — 宿主「文件」菜单两条命令的回归测试。
- *
- * 锁住的契约（`src/layout/components/webview.tsx` 是发送方）：
- * `dsh://session:new` → 官方新建会话入口；`dsh://workspace:add` → 选目录 + 建工作区 +
- * 开新会话。官方能力缺席时退级为点官方按钮（DOM 路径），两边都不可用才告警。
- */
 import type { ClientContext } from '../types'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { navigationFeature } from './navigation'
 
-// 协议字面量按宿主侧 `src/layout/components/webview.tsx` 逐字写死。
 const CMD_NEW_SESSION = 'dsh://session:new'
 const CMD_ADD_WORKSPACE = 'dsh://workspace:add'
+const NAVIGATION_GLOBAL = '__DSH_NAVIGATION__'
 
-/** 父窗口桥假实现：只保留 dispatch（宿主 → iframe 命令）。 */
-function stubHost(): { post: ReturnType<typeof vi.fn>, dispatch: (data: unknown) => void } {
+interface Host {
+  post: ReturnType<typeof vi.fn>
+  window: Record<string, unknown>
+  dispatch: (data: unknown) => void
+}
+
+function stubHost(): Host {
   const listeners = new Set<(event: MessageEvent) => void>()
   const parent = { postMessage: vi.fn() }
-  vi.stubGlobal('window', {
+  const storage = new Map<string, string>()
+  const host: Record<string, unknown> = {
     parent,
+    sessionStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value)
+      },
+    },
     addEventListener: (_type: string, handler: (event: MessageEvent) => void) => listeners.add(handler),
     removeEventListener: (_type: string, handler: (event: MessageEvent) => void) => listeners.delete(handler),
-  })
+  }
+  vi.stubGlobal('window', host)
   return {
     post: parent.postMessage,
+    window: host,
     dispatch: (data) => {
       for (const handler of [...listeners])
         handler({ source: parent, data } as unknown as MessageEvent)
@@ -31,66 +38,135 @@ function stubHost(): { post: ReturnType<typeof vi.fn>, dispatch: (data: unknown)
   }
 }
 
-/** ctx 只暴露适配层要探测的服务名（`readService` 优先走 ctx.get）。 */
 function ctxWithServices(services: Record<string, unknown>): ClientContext {
   return { get: (name: string) => services[name] } as unknown as ClientContext
 }
 
+function stubSessions(ids: () => string[], subscribe = vi.fn()) {
+  return { list: { getSnapshot: () => ({ ids: ids() }), subscribe } }
+}
+
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 describe('navigationFeature', () => {
-  it('waits for the existing target, opens it once and acknowledges without creating a session', async () => {
+  it('会话列表就绪后消费一次性注入的跳转目标，并清除注入载荷', async () => {
     const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target' }
     let ids: string[] = []
-    let complete!: () => void
-    const openSession = vi.fn(() => new Promise<void>((resolve) => {
-      complete = resolve
-    }))
-    const startSession = vi.fn()
+    const openSession = vi.fn()
+
     const dispose = navigationFeature.call(ctxWithServices({
-      sessions: { list: { getSnapshot: () => ({ ids }), subscribe: vi.fn() } },
-      uiWorkspace: { openSession, startSession },
+      sessions: stubSessions(() => ids),
+      uiWorkspace: { openSession },
     }))
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
+
+    expect(host.window[NAVIGATION_GLOBAL]).toBeUndefined()
     expect(openSession).not.toHaveBeenCalled()
-    ids = ['target', 'current']
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
+
+    ids = ['other', 'target']
+    await vi.advanceTimersByTimeAsync(500)
+    expect(openSession).toHaveBeenCalledExactlyOnceWith('target')
+
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(openSession).toHaveBeenCalledOnce()
     expect(host.post).not.toHaveBeenCalled()
-    complete()
-    await vi.waitFor(() => expect(host.post).toHaveBeenCalledExactlyOnceWith({ type: 'dsh://session:opened', sessionId: 'target' }, '*'))
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
-    expect(host.post.mock.calls).toEqual([
-      [{ type: 'dsh://session:opened', sessionId: 'target' }, '*'],
-      [{ type: 'dsh://session:opened', sessionId: 'target' }, '*'],
-    ])
-    expect(openSession.mock.calls).toEqual([['target']])
-    expect(startSession).not.toHaveBeenCalled()
+    dispose()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('同一窗口的帧内重载不再重复打开已消费的跳转目标', async () => {
+    const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target' }
+    const openSession = vi.fn()
+    const services = {
+      sessions: stubSessions(() => ['target']),
+      uiWorkspace: { openSession },
+    }
+
+    const dispose = navigationFeature.call(ctxWithServices(services))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(openSession).toHaveBeenCalledOnce()
+    dispose()
+
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target' }
+    const reloaded = navigationFeature.call(ctxWithServices(services))
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(openSession).toHaveBeenCalledOnce()
+    expect(host.post).not.toHaveBeenCalled()
+    reloaded()
+  })
+
+  it('没有注入载荷时不打开任何会话', async () => {
+    const host = stubHost()
+    const openSession = vi.fn()
+
+    const dispose = navigationFeature.call(ctxWithServices({
+      sessions: stubSessions(() => ['target']),
+      uiWorkspace: { openSession },
+    }))
+
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(openSession).not.toHaveBeenCalled()
+    expect(host.post).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('reports a failed open and allows retrying the same session', async () => {
+  it('目标会话始终缺席时上报插件错误而不是静默半工作', async () => {
     const host = stubHost()
-    const openSession = vi.fn().mockRejectedValueOnce(new Error('load failed')).mockResolvedValue(undefined)
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'missing' }
+    const openSession = vi.fn()
+
     const dispose = navigationFeature.call(ctxWithServices({
-      sessions: { list: { getSnapshot: () => ({ ids: ['target'] }), subscribe: vi.fn() } },
+      sessions: stubSessions(() => ['target']),
       uiWorkspace: { openSession },
     }))
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
-    await vi.waitFor(() => expect(host.post).toHaveBeenCalledWith({ type: 'dsh://session:opened', sessionId: 'target', error: 'Error: load failed' }, '*'))
-    host.dispatch({ type: 'dsh://session:open', sessionId: 'target' })
-    await vi.waitFor(() => expect(openSession).toHaveBeenCalledTimes(2))
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(openSession).not.toHaveBeenCalled()
+    expect(host.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dsh://plugin-error',
+        error: expect.stringContaining('missing'),
+        action: 'runtime',
+      }),
+      '*',
+    )
+    dispose()
+  })
+
+  it('打开会话失败时上报插件错误', async () => {
+    const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target' }
+    const openSession = vi.fn(() => Promise.reject(new Error('load failed')))
+
+    const dispose = navigationFeature.call(ctxWithServices({
+      sessions: stubSessions(() => ['target']),
+      uiWorkspace: { openSession },
+    }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(host.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'dsh://plugin-error',
+        error: 'Error: load failed',
+      }),
+      '*',
+    )
     dispose()
   })
 
   it('dsh://session:new 走官方 startSession，其它 type 不触发', async () => {
-    const startSession = vi.fn()
     const host = stubHost()
-    const ctx = ctxWithServices({ uiWorkspace: { startSession } })
+    const startSession = vi.fn()
+    const dispose = navigationFeature.call(ctxWithServices({ uiWorkspace: { startSession } }))
 
-    const dispose = navigationFeature.call(ctx)
     host.dispatch({ type: 'dsh://other' })
     host.dispatch({ type: CMD_NEW_SESSION })
 
@@ -103,9 +179,8 @@ describe('navigationFeature', () => {
     const pickDirectory = vi.fn(async () => 'C:/ws')
     const create = vi.fn(async () => ({ workspaceId: 'ws-1' }))
     const host = stubHost()
-    const ctx = ctxWithServices({ workspaces: { create }, uiWorkspace: { startSession, pickDirectory } })
+    const dispose = navigationFeature.call(ctxWithServices({ workspaces: { create }, uiWorkspace: { startSession, pickDirectory } }))
 
-    const dispose = navigationFeature.call(ctx)
     host.dispatch({ type: CMD_ADD_WORKSPACE })
 
     await vi.waitFor(() => expect(create).toHaveBeenCalledWith({ path: 'C:/ws' }))
@@ -121,9 +196,8 @@ describe('navigationFeature', () => {
       }),
     })
     const host = stubHost()
-    const ctx = ctxWithServices({})
+    const dispose = navigationFeature.call(ctxWithServices({}))
 
-    const dispose = navigationFeature.call(ctx)
     host.dispatch({ type: CMD_NEW_SESSION })
     host.dispatch({ type: CMD_ADD_WORKSPACE })
 
