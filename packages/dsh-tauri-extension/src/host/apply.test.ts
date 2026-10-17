@@ -20,9 +20,25 @@ afterEach(() => {
 describe('apply provider lifecycle', () => {
   it('activates the server before starting packaged skills and cleans both lifecycles', async () => {
     const effects = new Map<string, () => (() => void)>()
-    const host = { marker: 'host', webServer: { register: vi.fn(() => () => {}) } }
+    const host = {
+      marker: 'host',
+      webServer: { register: vi.fn(() => () => {}) },
+      credentials: { readRecord: async () => undefined },
+    }
     const ctx = {
-      inject: vi.fn((_names: string[], callback: (context: unknown) => unknown) => callback(host)),
+      inject: vi.fn((names: string[], callback: (context: unknown) => unknown) => {
+        const granted = Object.create(host) as typeof host
+        for (const key of Object.keys(host)) {
+          if (names.includes(key))
+            continue
+          Object.defineProperty(granted, key, {
+            get() {
+              throw new Error(`cannot get property "${key}" without inject`)
+            },
+          })
+        }
+        return callback(granted)
+      }),
       effect: vi.fn((effect: () => (() => void), label: string) => effects.set(label, effect)),
     }
     apply(ctx as unknown as HostContext, { profile: 'chosen' })
@@ -33,7 +49,8 @@ describe('apply provider lifecycle', () => {
     expect(() => getServerContext(server)).toThrow()
     const unmount = effects.get('dsh-tauri-extension: routes')!()
     disposers.push(unmount)
-    expect(getServerContext(server)).toBe(host)
+    const mounted = getServerContext(server) as unknown as typeof host
+    expect(mounted.credentials.readRecord).toEqual(expect.any(Function))
     const dispose = effects.get('dsh-tauri-extension: skill provider')!()
     expect(provider.start).toHaveBeenCalledExactlyOnceWith(packagedSkillsDir())
     expect(dispose).toBe(disposeProviderRuntime)

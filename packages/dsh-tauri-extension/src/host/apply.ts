@@ -14,7 +14,7 @@ export type { Config } from './apply.types'
 
 export const name = PLUGIN_ID
 
-export const inject = ['webServer', 'skills', 'connection']
+export const inject = ['webServer', 'skills', 'connection', 'credentials']
 
 export { loadFilesystemSkillPlugin } from './service/provider.utils'
 
