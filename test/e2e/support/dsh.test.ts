@@ -44,7 +44,7 @@ describe('独立 CLI 与用户目录隔离', () => {
     expect(() => resolveDshCommand(), '老核心不得继续作为适配基线').toThrow('最低版本为 0.1.7-rc.1')
   })
 
-  it.each(['0.1.7-rc.1', '0.2.1-rc.1'])('独立实物 CLI 精确匹配时放行：%s', (version) => {
+  it.each(['0.1.7-rc.1', '0.2.1-rc.1', '0.2.1-rc.2'])('独立实物 CLI 精确匹配时放行：%s', (version) => {
     const entry = cli(version)
     vi.stubEnv('DSH_E2E_DSH_BIN', entry)
     vi.stubEnv('DSH_E2E_CORE_VERSION', version)

@@ -17,6 +17,22 @@ function readManifest(file: URL): Manifest {
 }
 
 describe('workspace DSH development dependency ownership', () => {
+  it('pins every Harness development catalog entry to rc.2 without retaining rc.1 resolutions', () => {
+    const manifest = readManifest(new URL('package.json', root))
+    const names = Object.keys(manifest.devDependencies ?? {}).filter(name => name.startsWith('@deepseek-ai/dsh-')).sort()
+    expect(names).toHaveLength(32)
+    const workspace = readFileSync(new URL('pnpm-workspace.yaml', root), 'utf8')
+    const catalog = workspace.match(/^ {2}dsh:\r?\n([\s\S]*?)(?=^ {2}\w+:)/m)?.[1]
+    expect(catalog).toBeTypeOf('string')
+    const entries = [...catalog!.matchAll(/^ {4}'(@deepseek-ai\/dsh-[^']+)': ([^\r\n]+)$/gm)]
+      .map(([, name, version]) => [name, version])
+    expect(Object.fromEntries(entries)).toEqual(Object.fromEntries(names.map(name => [name, '0.2.1-rc.2'])))
+    const lockfile = readFileSync(new URL('pnpm-lock.yaml', root), 'utf8')
+    expect(lockfile).not.toContain('0.2.1-rc.1')
+    for (const name of names)
+      expect(lockfile).toContain(`'${name}':\n      specifier: 0.2.1-rc.2\n      version: 0.2.1-rc.2`)
+  })
+
   it('keeps Zod development-only at the root rather than shipping a second runtime copy', () => {
     expect(readManifest(new URL('package.json', root)).devDependencies?.zod).toBe('catalog:utils')
     for (const file of packages) {

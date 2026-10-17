@@ -25,14 +25,14 @@ describe('local core compatibility baseline', () => {
     expect(manifest.dependencies.dsh.engine.minimum).toBe('0.1.7-rc.1')
   })
 
-  it('推荐版本为 0.2.1-rc.1，仍是支持版本而非最低支持门槛', () => {
-    expect(manifest.engines.dsh.recommend).toBe('0.2.1-rc.1')
-    expect(manifest.dependencies.dsh.engine.recommend).toBe('0.2.1-rc.1')
-    expect(isCoreUnsupported('0.2.1-rc.1')).toBe(false)
+  it('推荐版本为 0.2.1-rc.2，仍是支持版本而非最低支持门槛', () => {
+    expect(manifest.engines.dsh.recommend).toBe('0.2.1-rc.2')
+    expect(manifest.dependencies.dsh.engine.recommend).toBe('0.2.1-rc.2')
+    expect(isCoreUnsupported('0.2.1-rc.2')).toBe(false)
   })
 
-  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.2'])('低于推荐版本的本地核心 %s 仍然受支持', (version) => {
-    expect(compareVersions(version, '0.2.1-rc.1')).toBe(-1)
+  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.2', '0.2.1-rc.1'])('低于推荐版本的本地核心 %s 仍然受支持', (version) => {
+    expect(compareVersions(version, '0.2.1-rc.2')).toBe(-1)
     expect(isCoreUnsupported(version)).toBe(false)
   })
 

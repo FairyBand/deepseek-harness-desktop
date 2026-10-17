@@ -3,12 +3,12 @@
 ## deepseek-ai/deepseek-harness
 
 - Repository: <https://github.com/deepseek-ai/deepseek-harness>
-- Reference version: `dsh-v0.2.1-rc.1`
-- Reference revision: `1600d8a1e140dcde43a1a0941940a0480712c011`
-- Previous documented reference: `dsh-v0.2.1-alpha.1` (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`); retained as historical attribution, not a claim that this release recopies or revalidates every derived file.
+- Reference version: `dsh-v0.2.1-rc.2`
+- Reference revision: `687f282e8625c6b8d11ff58211a90524be2e4317`
+- Previous documented reference: `dsh-v0.2.1-rc.1` (`1600d8a1e140dcde43a1a0941940a0480712c011`); alpha.1 (`5badb15009ae1756c3afe0ae0cef1faafc290ccc`) remains historical attribution. This release does not recopy or revalidate every derived file.
 - Source: `source/deepseek-harness`
-- Support policy: recommended core `0.2.1-rc.1`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.1.md>). Earlier version comparisons below are historical, not a current support promise.
-- Catalog pin: `dsh:` → `0.2.1-rc.1` (`pnpm-workspace.yaml`)
+- Support policy: recommended core `0.2.1-rc.2`, minimum core `0.1.7-rc.1`; earlier cores are unsupported. Verification scope: [current compatibility record](<../dsh-tauri/docs/compatibility-0.2.1-rc.2.md>). Earlier version comparisons below are historical, not a current support promise.
+- Catalog pin: `dsh:` → `0.2.1-rc.2` (`pnpm-workspace.yaml`)
 - License: MIT — Copyright (c) 2026 DeepSeek
 - Not copied: the native-style context menu is this repo's own feature; where an action exists officially it is delegated to the official implementation first, with the plugin's own path as fallback.
 

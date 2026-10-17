@@ -22,7 +22,7 @@ const constants = {
   dshCoreUrl: 'https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/latest/download/',
 }
 
-const DSH_TAG = 'dsh-0.2.1-rc.1-39009013600'
+const DSH_TAG = 'dsh-0.2.1-rc.2-39022695148'
 
 function assetsFor(platform: BundlePlatform, arch: BundleArch, options: { withGit?: boolean } = {}) {
   return bundleMetadata.bundleAssets({ platform, arch, constants, dshTag: DSH_TAG, ...options })
@@ -120,7 +120,7 @@ describe('bundle release resolution', () => {
     expect(bundleMetadata.findReleaseTag([
       { tag_name: 'dsh-0.1.7-rc.1-35871708301' },
       { tag_name: DSH_TAG },
-    ], '0.2.1-rc.1')).toBe(DSH_TAG)
+    ], '0.2.1-rc.2')).toBe(DSH_TAG)
   })
 
   it('fails loudly when no release matches', () => {
@@ -128,7 +128,7 @@ describe('bundle release resolution', () => {
   })
 
   it('resolves the tag through the GitHub releases API', async () => {
-    const tag = await bundleMetadata.resolveDshTag('0.2.1-rc.1', async () => [
+    const tag = await bundleMetadata.resolveDshTag('0.2.1-rc.2', async () => [
       { tag_name: 'dsh-0.1.7-rc.1-35871708301' },
       { tag_name: DSH_TAG },
     ])
@@ -145,8 +145,8 @@ describe('bundle build constants', () => {
     expect(parsed.pnpmSha256).toHaveLength(64)
     expect(parsed.mingitX64Sha256).toHaveLength(64)
     expect(parsed.dshCoreUrl).toContain('deepseek-harness-pkg')
-    expect(bundleMetadata.readRecommendedDshVersion(process.cwd())).toBe('0.2.1-rc.1')
-    expect(bundleMetadata.readManifest(process.cwd())).toMatchObject({ engines: { dsh: { recommend: '0.2.1-rc.1', minimum: '0.1.7-rc.1' } } })
+    expect(bundleMetadata.readRecommendedDshVersion(process.cwd())).toBe('0.2.1-rc.2')
+    expect(bundleMetadata.readManifest(process.cwd())).toMatchObject({ engines: { dsh: { recommend: '0.2.1-rc.2', minimum: '0.1.7-rc.1' } } })
   })
 })
 
@@ -169,7 +169,7 @@ describe('jsonc stripping', () => {
 describe('bundle manifest rewrite', () => {
   const SHIPPED = `{
   // 依赖映射规范
-  "engines": { "dsh": { "recommend": "0.2.1-rc.1", "minimum": "0.1.7-rc.1" } },
+  "engines": { "dsh": { "recommend": "0.2.1-rc.2", "minimum": "0.1.7-rc.1" } },
   "dependencies": {
     "node": { "entry": "node.exe", "managedRoot": "$AppData/runtime", "overridable": true },
     "pnpm": { "entry": "bin/pnpm.cjs", "managedRoot": "$AppData/dependencies/pnpm", "overridable": true },
@@ -204,7 +204,7 @@ describe('bundle manifest rewrite', () => {
         // 入口形状由清单声明，改写托管根不得动它。
         expect(manifest.dependencies[key].entry).toEqual(shipped.dependencies[key].entry)
       }
-      expect(manifest.engines.dsh.recommend).toBe('0.2.1-rc.1')
+      expect(manifest.engines.dsh.recommend).toBe('0.2.1-rc.2')
       // 未随包的 git 保持清单原值：不能指向并不存在的 `$Resources/git`。
       expect(manifest.dependencies.git.managedRoot).toBe('$AppData/dependencies/git')
       expect(manifest.dependencies.git.overridable).toBe(true)

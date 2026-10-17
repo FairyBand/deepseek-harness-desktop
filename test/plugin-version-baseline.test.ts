@@ -51,6 +51,7 @@ describe('运行插件最低内核声明', () => {
       ['0.1.7', true],
       ['0.1.8-alpha.1', true],
       ['0.2.1-rc.1', true],
+      ['0.2.1-rc.2', true],
       ['0.1.7-rc.0', false],
       ['0.1.7-alpha.1', false],
       ['0.1.6', false],

@@ -18,7 +18,7 @@ const config: Config = {
   reconnectMaxDelayMs: 1,
   reconnectMaxAttempts: 1,
 }
-const releases = [{ tag: 'dsh-0.2.1-rc.1-39009013600', prerelease: false }]
+const releases = [{ tag: 'dsh-0.2.1-rc.2-39022695148', prerelease: false }]
 const bootHtml = '<script>globalThis["__DSH_BOOT__"] = {"release":{"version":"0.1.7-rc.0"},"entries":[{"url":"/plugins/layout/client.js"}]};</script>'
 
 function fetchers() {
@@ -47,11 +47,11 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('remote DSH baseline', () => {
   it('uses the manifest recommendation and verified offline fallback', async () => {
-    expect(RECOMMENDED_DSH_VERSION).toBe('0.2.1-rc.1')
-    expect(FALLBACK_DSH_TAG).toBe('dsh-0.2.1-rc.1-39009013600')
+    expect(RECOMMENDED_DSH_VERSION).toBe('0.2.1-rc.2')
+    expect(FALLBACK_DSH_TAG).toBe('dsh-0.2.1-rc.2-39022695148')
     const plan = await planRemoteInstall('Linux x86_64', {}, fetchers())
-    expect(plan.dshVersion).toBe('0.2.1-rc.1')
-    expect(plan.dsh).toMatchObject({ tag: 'dsh-0.2.1-rc.1-39009013600' })
+    expect(plan.dshVersion).toBe('0.2.1-rc.2')
+    expect(plan.dsh).toMatchObject({ tag: 'dsh-0.2.1-rc.2-39022695148' })
   })
 
   it.each(['0.1.2-rc.1', '0.1.7-rc.0', 'dsh-0.1.6-rc.9-42', 'dsh-0.1.7-rc.0-42', 'dsh-invalid-42'])(
@@ -65,7 +65,7 @@ describe('remote DSH baseline', () => {
     },
   )
 
-  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.1.8-alpha.1', '0.2.1-rc.1'])(
+  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.1.8-alpha.1', '0.2.1-rc.2'])(
     'admits supported prerelease boundary %s',
     async (version) => {
       const mocks = fetchers()
@@ -116,7 +116,7 @@ describe('remote DSH baseline', () => {
     expect(events).toHaveBeenCalledWith('failed', 'bootstrap 失败', expect.objectContaining({ terminal: 'failed' }))
   })
 
-  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.1.8-alpha.1', '0.2.1-rc.1'])('accepts installed package metadata at or above floor: %s', async (version) => {
+  it.each(['0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.1.8-alpha.1', '0.2.1-rc.2'])('accepts installed package metadata at or above floor: %s', async (version) => {
     const session = fakeSession(() => ({ code: 0, stdout: JSON.stringify({ version }), stderr: '' }))
     await expect(assertRemoteDshVersion(session)).resolves.toBeUndefined()
     expect(session.commands[0]).toContain('node_modules/@deepseek-ai/dsh/package.json')
