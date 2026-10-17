@@ -117,7 +117,7 @@ pub fn spawn_with_hidden_console_owned(
     current_dir: Option<&Path>,
     envs: &HashMap<String, String>,
 ) -> io::Result<(File, File, u32, HANDLE)> {
-    spawn_with_hidden_console_inner(program, args, current_dir, envs, None, &[])
+    spawn_with_hidden_console_inner(program, args, current_dir, envs, None, None, &[])
 }
 
 pub(crate) fn spawn_with_hidden_console_in_job(
@@ -127,16 +127,17 @@ pub(crate) fn spawn_with_hidden_console_in_job(
     envs: &HashMap<String, String>,
     job: &ProcessJob,
 ) -> io::Result<(File, File, u32, HANDLE)> {
-    spawn_with_hidden_console_inner(program, args, current_dir, envs, Some(job), &[])
+    spawn_with_hidden_console_inner(program, args, current_dir, envs, Some(job), None, &[])
 }
 
 pub(crate) fn probe_in_job(
     program: &Path,
     args: &[OsString],
-    job: &ProcessJob,
+    lifetime_job: &ProcessJob,
     registration_gate: &Mutex<bool>,
     remove_node_options: bool,
 ) -> io::Result<Output> {
+    let probe_job = ProcessJob::new()?;
     let (mut stdout, mut stderr, _, handle) = {
         let shutdown = registration_gate
             .lock()
@@ -152,7 +153,8 @@ pub(crate) fn probe_in_job(
             args,
             None,
             &HashMap::new(),
-            Some(job),
+            Some(lifetime_job),
+            Some(&probe_job),
             if remove_node_options {
                 &["NODE_OPTIONS"]
             } else {
@@ -193,14 +195,14 @@ pub(crate) fn probe_in_job(
             std::thread::sleep(Duration::from_millis(5));
         }
     })();
-    let terminate = job.terminate();
+    let terminate = probe_job.terminate();
     let cleanup = (|| {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
             if unsafe {
                 QueryInformationJobObject(
-                    job.handle.as_raw_handle(),
+                    probe_job.handle.as_raw_handle(),
                     JobObjectBasicAccountingInformation,
                     &mut accounting as *mut _ as *mut core::ffi::c_void,
                     std::mem::size_of_val(&accounting) as u32,
@@ -291,7 +293,7 @@ pub fn spawn_with_hidden_console_tracked(
     envs: &HashMap<String, String>,
 ) -> io::Result<(File, File, HANDLE)> {
     let (stdout, stderr, _, handle) =
-        spawn_with_hidden_console_inner(program, args, current_dir, envs, None, &[])?;
+        spawn_with_hidden_console_inner(program, args, current_dir, envs, None, None, &[])?;
     Ok((stdout, stderr, handle))
 }
 
@@ -301,6 +303,7 @@ fn spawn_with_hidden_console_inner(
     current_dir: Option<&Path>,
     envs: &HashMap<String, String>,
     job: Option<&ProcessJob>,
+    nested_job: Option<&ProcessJob>,
     remove_env: &[&str],
 ) -> io::Result<(File, File, u32, HANDLE)> {
     unsafe {
@@ -370,7 +373,12 @@ fn spawn_with_hidden_console_inner(
         let thread = OwnedHandle::from_raw_handle(process_info.hThread);
         drop((stdout_write, stderr_write, stdin_handle));
         if let Some(job) = job {
-            assign_and_resume(job, process.as_raw_handle(), thread.as_raw_handle())?;
+            assign_and_resume(
+                job,
+                nested_job,
+                process.as_raw_handle(),
+                thread.as_raw_handle(),
+            )?;
         }
         Ok((
             File::from(stdout_read),
@@ -395,14 +403,24 @@ fn create_output_pipe(attrs: &SECURITY_ATTRIBUTES) -> io::Result<(OwnedHandle, O
     Ok((read, write))
 }
 
-fn assign_and_resume(job: &ProcessJob, process: HANDLE, thread: HANDLE) -> io::Result<()> {
-    let operation = if unsafe { AssignProcessToJobObject(job.handle.as_raw_handle(), process) } == 0
-    {
-        "AssignProcessToJobObject"
-    } else if unsafe { ResumeThread(thread) } == u32::MAX {
-        "ResumeThread"
-    } else {
-        return Ok(());
+fn assign_and_resume(
+    job: &ProcessJob,
+    nested_job: Option<&ProcessJob>,
+    process: HANDLE,
+    thread: HANDLE,
+) -> io::Result<()> {
+    let mut operation = None;
+    if unsafe { AssignProcessToJobObject(job.handle.as_raw_handle(), process) } == 0 {
+        operation = Some("AssignProcessToJobObject");
+    } else if let Some(nested_job) = nested_job {
+        if unsafe { AssignProcessToJobObject(nested_job.handle.as_raw_handle(), process) } == 0 {
+            operation = Some("AssignProcessToJobObject nested");
+        }
+    }
+    let operation = match operation {
+        Some(operation) => operation,
+        None if unsafe { ResumeThread(thread) } == u32::MAX => "ResumeThread",
+        None => return Ok(()),
     };
     let error = io::Error::last_os_error();
     terminate_and_wait(process).map_err(|cleanup| {
@@ -782,7 +800,12 @@ mod tests {
             .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
             .spawn()
             .unwrap();
-        let result = assign_and_resume(&restricted, child.as_raw_handle(), std::ptr::null_mut());
+        let result = assign_and_resume(
+            &restricted,
+            None,
+            child.as_raw_handle(),
+            std::ptr::null_mut(),
+        );
         let exited = unsafe { WaitForSingleObject(child.as_raw_handle(), 0) };
         if exited != WAIT_OBJECT_0 {
             child.kill().expect("clean up suspended Node fixture");
@@ -818,12 +841,8 @@ mod tests {
         assert!(!env.to_ascii_lowercase().contains("node_options="));
         let env = String::from_utf16_lossy(&build_env_block(&vars, &[]));
         assert!(env.contains("--invalid-probe-option"));
-        for timeout in [false, true] {
-            let ready = root.path().join(if timeout {
-                "timeout.pid"
-            } else {
-                "success.pid"
-            });
+        for (index, timeout) in [false, true, false].into_iter().enumerate() {
+            let ready = root.path().join(format!("probe-{index}.pid"));
             let script = format!(
                 "Object.assign(process.env,{});const fs=require('fs');const child=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),60000)'],{{stdio:'inherit',windowsHide:true,env:{{...process.env,NODE_NO_WARNINGS:'1'}}}});child.once('error',error=>{{throw error}});child.once('spawn',()=>{{fs.writeFileSync({},String(child.pid));fs.writeSync(1,Buffer.alloc(131072,111));fs.writeSync(2,Buffer.alloc(131072,101));{}}});",
                 serde_json::to_string(&envs).unwrap(),
@@ -857,13 +876,12 @@ mod tests {
                 accounting.ActiveProcesses, 0,
                 "probe descendants must be reaped before returning"
             );
-            assert!(
-                std::fs::read_to_string(ready)
-                    .unwrap()
-                    .parse::<u32>()
-                    .unwrap()
-                    > 0
-            );
+            let pid = std::fs::read_to_string(&ready)
+                .unwrap_or_else(|error| panic!("probe fixture missing {}: {error}; timeout={timeout}, elapsed={elapsed:?}, result={result:?}", ready.display()))
+                .parse::<u32>()
+                .unwrap();
+            assert!(pid > 0);
+            std::fs::remove_file(&ready).ok();
             if timeout {
                 assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
                 assert!(elapsed >= Duration::from_secs(8));
@@ -908,6 +926,170 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn terminating_lifetime_job_reaps_running_probe_descendants() {
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+
+        let node = find_node_on_path().expect("node.exe required for probe tests");
+        let root = tempfile::tempdir().unwrap();
+        let envs = isolated_node_env(root.path());
+        let job = std::sync::Arc::new(ProcessJob::new().unwrap());
+        let gate = Mutex::new(false);
+        let ready = root.path().join("running-probe.pid");
+        let script = format!(
+            "Object.assign(process.env,{});const fs=require('fs');const child=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),60000)'],{{stdio:'inherit',windowsHide:true,env:{{...process.env,NODE_NO_WARNINGS:'1'}}}});child.once('error',error=>{{throw error}});child.once('spawn',()=>fs.writeFileSync({},String(child.pid)));setTimeout(()=>process.exit(0),60000);",
+            serde_json::to_string(&envs).unwrap(),
+            serde_json::to_string(&ready).unwrap(),
+        );
+        let worker_job = job.clone();
+        let worker = std::thread::spawn(move || {
+            probe_in_job(
+                &node,
+                &["--no-warnings".into(), "-e".into(), script.into()],
+                &worker_job,
+                &gate,
+                true,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&ready) {
+                if let Ok(pid) = text.parse::<u32>() {
+                    break pid;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "running probe descendant did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(
+            !descendant.is_null(),
+            "open descendant: {}",
+            io::Error::last_os_error()
+        );
+        let descendant = unsafe { OwnedHandle::from_raw_handle(descendant) };
+        assert_eq!(
+            unsafe { WaitForSingleObject(descendant.as_raw_handle(), 0) },
+            WAIT_TIMEOUT
+        );
+        job.terminate().expect("terminate lifetime job");
+        let output = worker
+            .join()
+            .unwrap()
+            .expect("probe must return after lifetime job termination");
+        assert!(!output.status.success());
+        assert_eq!(
+            unsafe { WaitForSingleObject(descendant.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0,
+            "lifetime job termination must reap nested probe descendants"
+        );
+        let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    job.handle.as_raw_handle(),
+                    JobObjectBasicAccountingInformation,
+                    &mut accounting as *mut _ as *mut core::ffi::c_void,
+                    std::mem::size_of_val(&accounting) as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(accounting.ActiveProcesses, 0);
+    }
+
+    #[test]
+    fn probe_reuse_keeps_lifetime_job_assignable_under_concurrency() {
+        let node = find_node_on_path().expect("node.exe required for probe tests");
+        let root = tempfile::tempdir().unwrap();
+        let envs = isolated_node_env(root.path());
+        let gate = std::sync::Arc::new(Mutex::new(false));
+        let mut handles = Vec::new();
+        for thread in 0..16 {
+            let node = node.clone();
+            let root = root.path().to_path_buf();
+            let envs = envs.clone();
+            let gate = gate.clone();
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                let job = ProcessJob::new().map_err(|error| format!("thread={thread}: {error}"))?;
+                for round in 0..12 {
+                    let ready = root.join(format!("probe-reuse-{thread}-{round}.pid"));
+                    let script = format!(
+                        "Object.assign(process.env,{});const fs=require('fs');const child=require('child_process').spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),60000)'],{{stdio:'inherit',windowsHide:true,env:{{...process.env,NODE_NO_WARNINGS:'1'}}}});child.once('error',error=>{{throw error}});child.once('spawn',()=>{{fs.writeFileSync({},String(child.pid));process.exit(0);}});",
+                        serde_json::to_string(&envs).unwrap(),
+                        serde_json::to_string(&ready).unwrap(),
+                    );
+                    let output = probe_in_job(
+                        &node,
+                        &["--no-warnings".into(), "-e".into(), script.into()],
+                        &job,
+                        &gate,
+                        true,
+                    )
+                    .map_err(|error| format!("thread={thread} round={round}: {error}"))?;
+                    if !output.status.success() {
+                        return Err(format!(
+                            "thread={thread} round={round}: status {status:?}",
+                            status = output.status
+                        ));
+                    }
+                    let pid = std::fs::read_to_string(&ready)
+                        .map_err(|error| {
+                            format!(
+                                "thread={thread} round={round}: {}: {error}",
+                                ready.display()
+                            )
+                        })?
+                        .parse::<u32>()
+                        .map_err(|error| {
+                            format!(
+                                "thread={thread} round={round}: {}: {error}",
+                                ready.display()
+                            )
+                        })?;
+                    if pid == 0 {
+                        return Err(format!("thread={thread} round={round}: empty pid"));
+                    }
+                    std::fs::remove_file(&ready).ok();
+                }
+                let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+                if unsafe {
+                    QueryInformationJobObject(
+                        job.handle.as_raw_handle(),
+                        JobObjectBasicAccountingInformation,
+                        &mut accounting as *mut _ as *mut core::ffi::c_void,
+                        std::mem::size_of_val(&accounting) as u32,
+                        std::ptr::null_mut(),
+                    )
+                } == 0
+                {
+                    return Err(format!(
+                        "thread={thread}: query: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                if accounting.ActiveProcesses != 0 || accounting.TotalProcesses < 12 {
+                    return Err(format!(
+                        "thread={thread}: active={} total={}",
+                        accounting.ActiveProcesses, accounting.TotalProcesses
+                    ));
+                }
+                Ok(())
+            }));
+        }
+        let mut failures = Vec::new();
+        for handle in handles {
+            if let Err(error) = handle.join().unwrap() {
+                failures.push(error);
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     fn isolated_node_env(root: &Path) -> HashMap<String, String> {

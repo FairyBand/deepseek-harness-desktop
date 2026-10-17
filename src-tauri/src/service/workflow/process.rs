@@ -387,8 +387,13 @@ fn command_line_has_argument_after(cmdline: &str, preceding: &str, argument: &st
     })
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn is_windows_harness_command_line(cmdline: &str, dsh_bin: &str) -> bool {
+    windows_harness_arguments(cmdline, dsh_bin).is_some()
+}
+
+#[cfg(windows)]
+fn windows_harness_arguments(cmdline: &str, dsh_bin: &str) -> Option<Vec<String>> {
     let normalized = cmdline.replace('/', "\\");
     let path = dsh_bin.replace('/', "\\");
     // node 选项（`--max-old-space-size` 等）合法地夹在 node 与入口之间（issue #751）。
@@ -400,7 +405,18 @@ fn is_windows_harness_command_line(cmdline: &str, dsh_bin: &str) -> bool {
     let boundary = format!(
         r#"(?i)^\s*(?:"(?:[^"\r\n]*\\)?node(?:\.exe)?"|(?:[^\s"]*\\)?node(?:\.exe)?)(?:\s+(?:"-[^"\r\n]*"|-[^\s"]*(?:"[^"\r\n]*")?))*\s+{entry}\s+--profile\s+(?:"[^"\r\n]+"|[^\s"]+)(?:\s+--patch\s+(?:"[^"\r\n]+"|[^\s"]+))?\s+--port\s+\d+\s+--no-open\s*$"#
     );
-    regex::Regex::new(&boundary).is_ok_and(|pattern| pattern.is_match(&normalized))
+    let pattern = regex::Regex::new(&boundary).ok()?;
+    if !pattern.is_match(&normalized) {
+        return None;
+    }
+    let token = regex::Regex::new(r#"(?:[^\s"]+|"[^"\r\n]*")+"#).ok()?;
+    Some(
+        token
+            .find_iter(&normalized)
+            .skip(1)
+            .map(|argument| argument.as_str().replace('"', ""))
+            .collect(),
+    )
 }
 
 #[cfg(windows)]
@@ -689,8 +705,8 @@ fn terminate_confirmed_process(pid: u32, created: u64) -> Result<bool, String> {
     }
     let matches = state == WAIT_TIMEOUT
         && created != 0
-        && (u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime)) / 10
-            == created / 10;
+        && (u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime))
+            == created;
     let result = if matches {
         log::warn!("Terminating confirmed orphan Harness process {pid}");
         terminate_windows_process(pid, handle, kill_pid_tree).map(|()| true)
@@ -785,6 +801,9 @@ pub(super) fn reclaim_orphan_port(dsh_bin: &Path, port: u16) -> Result<bool, Str
         .lines()
         .find_map(|line| serde_json::from_str::<WindowsProcessEntry>(line).ok())
         .ok_or("HARNESS_CLEANUP_FAILED: confirmed listener snapshot missing")?;
+    for (root_pid, created) in targets {
+        terminate_confirmed_process(root_pid, created)?;
+    }
     let terminated = terminate_confirmed_process(listener.pid, listener.created)?;
     if wait_for_port_release(port, PORT_RELEASE_WAIT) {
         return Ok(true);
@@ -823,33 +842,27 @@ struct WindowsProcessAncestor {
     command_line: Option<String>,
 }
 
-/// 转发层：`cmd.exe /C node <入口>` 只是把命令转交给真身，它自己活着只代表还在等
-/// 子进程结束，不代表服务仍被某个桌面实例持有。nvmd 等 Node 版本管理器的垫片就是
-/// 这么转交的：垫片退出后真身的父进程是活着的 `cmd.exe`，旧谓词「父进程已退出」
-/// 漏杀 → 端口一直被占，下次启动 EADDRINUSE 起不来。
-///
-/// 只认 `/C node` 这种一次性转交：用户自己开着 `cmd.exe /K` 交互 shell 跑同一个
-/// 入口时，shell 的命令行里同样有 `--no-open`，但它是那个服务的宿主而不是转发层，
-/// 误判会让清扫顺手关掉用户的窗口。
 #[cfg(windows)]
-fn is_relay_ancestor(ancestor: &WindowsProcessAncestor, dsh_bin: &str) -> bool {
-    ancestor.name.eq_ignore_ascii_case("cmd.exe")
-        && ancestor.command_line.as_deref().is_some_and(|command| {
-            if command.contains(['&', '|', '<', '>', '^', '%', '\n', '\r']) {
-                return false;
-            }
-            let prefix = regex::Regex::new(r#"(?i)^\s*(?:"(?:[^"\r\n]*\\)?cmd(?:\.exe)?"|(?:[^\s"]*\\)?cmd(?:\.exe)?)\s+/c\s+"#).unwrap();
-            prefix.find(command).is_some_and(|matched| {
-                is_windows_harness_command_line(&command[matched.end()..], dsh_bin)
-            })
-        })
+fn windows_relay_arguments(
+    ancestor: &WindowsProcessAncestor,
+    dsh_bin: &str,
+) -> Option<Vec<String>> {
+    if !ancestor.name.eq_ignore_ascii_case("cmd.exe") {
+        return None;
+    }
+    let command = ancestor.command_line.as_deref()?;
+    if command.contains(['&', '|', '<', '>', '^', '%', '\n', '\r']) {
+        return None;
+    }
+    let prefix = regex::Regex::new(
+        r#"(?i)^\s*(?:"(?:[^"\r\n]*\\)?cmd(?:\.exe)?"|(?:[^\s"]*\\)?cmd(?:\.exe)?)\s+/c\s+"#,
+    )
+    .ok()?;
+    let matched = prefix.find(command)?;
+    windows_harness_arguments(&command[matched.end()..], dsh_bin)
 }
 
-/// 选出需要清扫的孤儿服务链，每条链返回转发层最顶层的进程：`taskkill /T` 会连同
-/// 下方的转发层与服务本体一起结束。判定只看「向上穿过所有转发层后还有没有活着的
-/// 宿主」：入口路径不匹配、已由本应用持有（`owned_pid`）、上方存在活着的非转发层
-/// 进程（另一个桌面实例的垫片、用户自己的 shell）、祖先创建时间晚于后代（PID
-/// 已被复用，父子关系失效），或祖先链被层数上限截断（上方仍可能有持有者）都不清扫。
+// issue #1122：只穿过同一命令的 cmd 转发层及其直接 node 垫片，仍须向上确认真实宿主。
 #[cfg(windows)]
 fn orphan_harness_pids(output: &[u8], dsh_bin: &str, owned_pid: Option<u32>) -> Vec<(u32, u64)> {
     let mut targets: Vec<(u32, u64)> = Vec::new();
@@ -857,29 +870,39 @@ fn orphan_harness_pids(output: &[u8], dsh_bin: &str, owned_pid: Option<u32>) -> 
         .lines()
         .filter_map(|line| serde_json::from_str::<WindowsProcessEntry>(line).ok())
     {
-        if entry.created == 0
-            || entry.ancestors_truncated
-            || Some(entry.pid) == owned_pid
-            || !is_windows_harness_command_line(&entry.command_line, dsh_bin)
-        {
+        if entry.created == 0 || entry.ancestors_truncated || Some(entry.pid) == owned_pid {
             continue;
         }
+        let Some(arguments) = windows_harness_arguments(&entry.command_line, dsh_bin) else {
+            continue;
+        };
         let mut root = (entry.pid, entry.created);
         let mut descendant = entry.created;
+        let mut child_is_relay = false;
+        let mut seen = vec![entry.pid];
         let mut owned = false;
         for ancestor in &entry.ancestors {
             if ancestor.created > descendant {
                 break;
             }
+            let relay = windows_relay_arguments(ancestor, dsh_bin).as_ref() == Some(&arguments);
+            let shim = child_is_relay
+                && ancestor.name.eq_ignore_ascii_case("node.exe")
+                && ancestor.command_line.as_deref().is_some_and(|command| {
+                    windows_harness_arguments(command, dsh_bin).as_ref() == Some(&arguments)
+                });
             if ancestor.created == 0
                 || Some(ancestor.pid) == owned_pid
-                || !is_relay_ancestor(ancestor, dsh_bin)
+                || seen.contains(&ancestor.pid)
+                || !(relay || shim)
             {
                 owned = true;
                 break;
             }
+            seen.push(ancestor.pid);
             root = (ancestor.pid, ancestor.created);
             descendant = ancestor.created;
+            child_is_relay = relay;
         }
         if owned || Some(root.0) == owned_pid {
             continue;
@@ -911,9 +934,7 @@ fn is_harness_command_line(cmdline: &str, dsh_bin: &str) -> bool {
 /// 会持续占用 `dependencies/dsh` 目录的文件句柄（node 以该目录为 cwd 且模块
 /// DLL 加载在内存），更新切换目录时触发 os error 32（INSTALL_BACKUP_FAILED）。
 ///
-/// Windows 只结束入口路径精确匹配且已失去持有者的 node 服务：父进程已退出，或
-/// 父进程只是垫片的 `cmd.exe /C node` 转发层且上方没有活着的垫片。仍由另一个
-/// 桌面实例持有的服务（真身直接挂在实例下，或转发层上方还压着活着的垫片）不做清扫。
+/// Windows 只结束同入口、同参数且穿过 cmd/node 转发链后已无真实宿主的服务。
 /// Unix 保持原有 release 路径匹配行为：枚举 `ps` 按入口路径与启动参数匹配命令行，
 /// 与父进程是否存活无关——垫片/shell 包装层的命令行同样带着入口路径与服务参数，
 /// 因此转发层与其下方的真身会被分别命中，不存在 Windows 的转发层漏杀问题
@@ -1634,6 +1655,193 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn nvmd_shim_cleanup_preserves_live_hosts_and_releases_orphan_subtrees() {
+        use std::os::windows::io::FromRawHandle;
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        };
+
+        let root = tempfile::Builder::new()
+            .prefix("dsh-nvmd 空格-")
+            .tempdir()
+            .unwrap();
+        let shim_source = root.path().join("shim.rs");
+        let shim = root.path().join("node.exe");
+        fs::write(
+            &shim_source,
+            r#"
+use std::{fs, process::{Command, Stdio}, os::windows::process::CommandExt, time::Duration};
+fn main() {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let command = format!("node \"{}\" {}", args[0], args[1..].join(" "));
+    let mut child = Command::new("cmd.exe").raw_arg("/C ").raw_arg(command)
+        .creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::null())
+        .stderr(Stdio::null()).spawn().unwrap();
+    fs::write("relay.pid", child.id().to_string()).unwrap();
+    child.wait().unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+"#,
+        )
+        .unwrap();
+        let compiled = Command::new("rustc")
+            .arg(&shim_source)
+            .arg("--crate-name=nvmd_shim_fixture")
+            .arg("-o")
+            .arg(&shim)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+
+        for mode in ["hosted", "sweep", "port"] {
+            let case = root.path().join(mode);
+            let core = case.join("dependencies").join("dsh");
+            let bin = core.join("lib").join("bin.js");
+            fs::create_dir_all(bin.parent().unwrap()).unwrap();
+            fs::write(&bin, r#"
+const fs = require('fs');
+const mcp = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {stdio: 'ignore'});
+require('net').createServer().listen(0, '127.0.0.1', function () {
+    fs.writeFileSync('ready.json', JSON.stringify({pid: process.pid, mcp: mcp.pid, port: this.address().port}));
+});
+setTimeout(() => process.exit(0), 60000);
+"#).unwrap();
+            let shim_pid_file = case.join("shim.pid");
+            let mut hosted = None;
+            let mut handles: Vec<(u32, OwnedHandle)> = Vec::new();
+            let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let shim_pid = if mode == "hosted" {
+                    let child = Command::new(&shim)
+                        .arg(&bin)
+                        .args(["--profile", "web", "--port", "3081", "--no-open"])
+                        .current_dir(&core)
+                        .creation_flags(0x08000000)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .unwrap();
+                    let pid = child.id();
+                    hosted = Some(child);
+                    pid
+                } else {
+                    let parent = "const c=require('child_process').spawn(process.argv[1],[process.argv[2],'--profile','web','--port','3081','--no-open'],{cwd:process.argv[3],detached:true,stdio:'ignore'});require('fs').writeFileSync(process.argv[4],String(c.pid));c.unref()";
+                    let output = Command::new("node.exe")
+                        .args(["-e", parent])
+                        .arg(&shim)
+                        .arg(&bin)
+                        .arg(&core)
+                        .arg(&shim_pid_file)
+                        .creation_flags(0x08000000)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "temporary parent must exit cleanly"
+                    );
+                    fs::read_to_string(&shim_pid_file)
+                        .unwrap()
+                        .parse::<u32>()
+                        .unwrap()
+                };
+                let mut retain = |pid| {
+                    let handle = unsafe {
+                        OpenProcess(
+                            PROCESS_QUERY_LIMITED_INFORMATION
+                                | PROCESS_SYNCHRONIZE
+                                | PROCESS_TERMINATE,
+                            0,
+                            pid,
+                        )
+                    };
+                    assert!(!handle.is_null(), "retain fixture {pid}");
+                    handles.push((pid, unsafe { OwnedHandle::from_raw_handle(handle) }));
+                };
+                retain(shim_pid);
+                let ready = core.join("ready.json");
+                let started = std::time::Instant::now();
+                while !ready.exists() && started.elapsed() < std::time::Duration::from_secs(10) {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                let ready: serde_json::Value = serde_json::from_slice(
+                    &fs::read(&ready).expect("temporary shim service ready"),
+                )
+                .unwrap();
+                let listener = ready["pid"].as_u64().unwrap() as u32;
+                let port = ready["port"].as_u64().unwrap() as u16;
+                retain(
+                    fs::read_to_string(core.join("relay.pid"))
+                        .unwrap()
+                        .parse::<u32>()
+                        .unwrap(),
+                );
+                retain(listener);
+                retain(ready["mcp"].as_u64().unwrap() as u32);
+                let snapshot = windows_process_snapshot(Some(listener)).unwrap();
+                let selected = orphan_harness_pids(&snapshot, bin.to_str().unwrap(), None);
+                assert!(
+                    fs::rename(&core, case.join("renamed")).is_err(),
+                    "{mode}: fixture must pin core"
+                );
+                if mode == "hosted" {
+                    assert_eq!(selected, vec![]);
+                    assert!(!reclaim_orphan_port(&bin, port).unwrap());
+                    terminate_stale_harness_processes_at(&bin).unwrap();
+                    for (pid, handle) in &handles {
+                        assert_eq!(
+                            unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) },
+                            WAIT_TIMEOUT,
+                            "hosted fixture {pid} must survive"
+                        );
+                    }
+                    assert!(fs::rename(&core, case.join("renamed")).is_err());
+                } else {
+                    assert_eq!(selected.len(), 1);
+                    assert_eq!(
+                        selected[0].0, shim_pid,
+                        "{mode}: select the top shim, not just the listener"
+                    );
+                    assert_ne!(selected[0].1, 0);
+                    if mode == "port" {
+                        assert!(reclaim_orphan_port(&bin, port).unwrap());
+                    } else {
+                        terminate_stale_harness_processes_at(&bin).unwrap();
+                    }
+                    for (pid, handle) in &handles {
+                        assert_eq!(
+                            unsafe { WaitForSingleObject(handle.as_raw_handle(), 5000) },
+                            WAIT_OBJECT_0,
+                            "{mode}: fixture {pid} must exit"
+                        );
+                    }
+                    assert!(!super::super::utils::is_port_in_use(port));
+                    fs::rename(&core, case.join("renamed"))
+                        .expect("orphan shim must release core for rename");
+                }
+            }));
+            for (pid, handle) in &handles {
+                terminate_windows_process(*pid, handle.as_raw_handle(), kill_pid_tree)
+                    .expect("cleanup retained fixture only");
+            }
+            if let Some(mut child) = hosted {
+                let _ = child.wait();
+            }
+            if let Err(error) = checked {
+                std::panic::resume_unwind(error);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn live_peer_service_is_not_reaped_from_temporary_core_directory() {
         use std::os::windows::process::CommandExt;
 
@@ -2044,10 +2252,15 @@ mod tests {
             .spawn()
             .unwrap();
         let result = terminate_confirmed_process(child.id(), 1);
+        let snapshot = windows_process_snapshot(Some(child.id())).unwrap();
+        let entry: WindowsProcessEntry = serde_json::from_slice(&snapshot).unwrap();
+        let sub_microsecond = entry.created / 10 * 10 + (entry.created + 1) % 10;
+        let precise_result = terminate_confirmed_process(child.id(), sub_microsecond);
         let alive = child.try_wait().unwrap().is_none();
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(result.unwrap(), false);
+        assert_eq!(precise_result.unwrap(), false);
         assert!(
             alive,
             "PID creation time mismatch must preserve the process"
@@ -2079,28 +2292,31 @@ mod tests {
         );
     }
 
-    /// 回归：nvmd 等 Node 版本管理器的垫片以 `cmd.exe /C node <入口>` 转交真身。
-    /// 垫片退出后真身的父进程是仍活着的 `cmd.exe`，旧谓词「父进程已退出」判定
-    /// 它「有人管」而跳过清扫 → 真身继续占着 3080，下次启动直接 EADDRINUSE。
-    /// 新谓词须穿过转发层清扫，同时不得误伤仍被活着的垫片持有的服务。
     #[cfg(windows)]
     #[test]
     fn orphan_selection_sweeps_through_relay_ancestors() {
         let bin = r"C:\Users\Example User\AppData\Roaming\dsh-tauri\dependencies\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js";
         let service = format!(r#"node.exe "{bin}" --profile web --port 3080 --no-open"#);
         let relay = format!(r#""cmd.exe" /C node "{bin}" --profile web --port 3080 --no-open"#);
-        let shim = format!(r"C:\nvmd\bin\node.exe {bin} --profile web --port 3080 --no-open");
+        let shim = format!(r#""C:\nvmd\bin\node.exe" "{bin}" --profile web --port 3080 --no-open"#);
         let entry = |pid: u32, ancestors: Vec<serde_json::Value>| serde_json::json!({ "pid": pid, "created": 1000 + u64::from(pid), "commandLine": service, "ancestors": ancestors });
         let ancestor = |created: u64, pid: u32, name: &str, command_line: &str| serde_json::json!({ "pid": pid, "created": created, "name": name, "commandLine": command_line });
         let output = [
             // 垫片退出，只剩 `cmd.exe` 压着真身 → 须连转发层一起结束
             entry(201, vec![ancestor(1100, 301, "cmd.exe", &relay)]),
-            // 转发层上方还压着活着的垫片 → 另一个桌面实例仍持有，不能碰
             entry(
                 202,
                 vec![
                     ancestor(1102, 302, "cmd.exe", &relay),
                     ancestor(1101, 402, "node.exe", &shim),
+                ],
+            ),
+            entry(
+                211,
+                vec![
+                    ancestor(1112, 311, "cmd.exe", &relay),
+                    ancestor(1111, 411, "node.exe", &shim),
+                    ancestor(1110, 511, "deepseek-harness-desktop.exe", ""),
                 ],
             ),
             // 真身直接挂在桌面实例下（没有垫片）→ 实例仍持有，不能碰
@@ -2142,11 +2358,133 @@ mod tests {
         .join("\n");
         assert_eq!(
             orphan_harness_pids(output.as_bytes(), bin, None),
-            vec![(301, 1100), (205, 1205)]
+            vec![(301, 1100), (402, 1101), (205, 1205)]
         );
         assert_eq!(
             orphan_harness_pids(output.as_bytes(), bin, Some(301)),
-            vec![(205, 1205)]
+            vec![(402, 1101), (205, 1205)]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn orphan_selection_requires_a_complete_same_command_shim_chain() {
+        let bin = r"C:\sandbox\dependencies\dsh\lib\bin.js";
+        let service = format!(r#"node.exe "{bin}" --profile web --port 3080 --no-open"#);
+        let relay = format!(r#"cmd.exe /C {service}"#);
+        let shim = format!(r#""C:\nvmd\bin\node.exe" "{bin}" --profile web --port 3080 --no-open"#);
+        let chain = serde_json::json!({
+            "pid": 101, "created": 1003, "commandLine": service,
+            "ancestors": [
+                { "pid": 102, "created": 1002, "name": "cmd.exe", "commandLine": relay },
+                { "pid": 103, "created": 1001, "name": "node.exe", "commandLine": shim }
+            ]
+        });
+        let select = |entry: &serde_json::Value, owned| {
+            orphan_harness_pids(entry.to_string().as_bytes(), bin, owned)
+        };
+        assert_eq!(select(&chain, None), vec![(103, 1001)]);
+        for owned in [101, 102, 103] {
+            assert_eq!(select(&chain, Some(owned)), vec![], "owned {owned}");
+        }
+        for (pointer, value) in [
+            ("/created", serde_json::json!(0)),
+            ("/ancestorsTruncated", serde_json::json!(true)),
+            ("/ancestors/0/created", serde_json::json!(0)),
+            ("/ancestors/1/created", serde_json::json!(0)),
+            ("/ancestors/1/pid", serde_json::json!(101)),
+            ("/ancestors/1/name", serde_json::json!("notnode.exe")),
+            ("/ancestors/1/commandLine", serde_json::Value::Null),
+            (
+                "/ancestors/1/commandLine",
+                serde_json::json!(shim.replace(bin, r"C:\foreign\bin.js")),
+            ),
+            (
+                "/ancestors/1/commandLine",
+                serde_json::json!(shim.replace("3080", "3081")),
+            ),
+            (
+                "/ancestors/1/commandLine",
+                serde_json::json!(shim.replace("web", "other")),
+            ),
+            (
+                "/ancestors/1/commandLine",
+                serde_json::json!(shim.replace(" --no-open", "")),
+            ),
+            (
+                "/ancestors/1/commandLine",
+                serde_json::json!(shim.replace(" --profile", " plugin --profile")),
+            ),
+            (
+                "/ancestors/0/commandLine",
+                serde_json::json!(relay.replace("/C", "/K")),
+            ),
+            (
+                "/ancestors/0/commandLine",
+                serde_json::json!(format!("{relay} & echo retained")),
+            ),
+            (
+                "/ancestors/0/commandLine",
+                serde_json::json!(relay.replace("3080", "3081")),
+            ),
+        ] {
+            let mut invalid = chain.clone();
+            if pointer == "/ancestorsTruncated" {
+                invalid["ancestorsTruncated"] = value;
+            } else {
+                *invalid.pointer_mut(pointer).unwrap() = value;
+            }
+            assert_eq!(select(&invalid, None), vec![], "{pointer}: {invalid}");
+        }
+        let mut direct_node = chain.clone();
+        direct_node["ancestors"].as_array_mut().unwrap().remove(0);
+        assert_eq!(select(&direct_node, None), vec![]);
+        for (name, command) in [
+            ("deepseek-harness-desktop.exe", "desktop.exe".to_string()),
+            ("cmd.exe", format!("cmd.exe /K {service}")),
+            ("node.exe", service.clone()),
+        ] {
+            let mut hosted = chain.clone();
+            hosted["ancestors"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "pid": 104, "created": 1000, "name": name, "commandLine": command
+                }));
+            assert_eq!(select(&hosted, None), vec![], "{name}");
+        }
+        let flags = r#"--max-old-space-size=8192 --report-directory="C:\用户 data\logs""#;
+        let patch = r#"--patch "C:\用户 data\cordis.patch.yml" "#;
+        let mut options = chain.clone();
+        options["commandLine"] = serde_json::json!(service
+            .replace("node.exe ", &format!("node.exe {flags} "))
+            .replace("--port", &format!("{patch}--port")));
+        options["ancestors"][0]["commandLine"] = serde_json::json!(relay
+            .replace("node.exe ", &format!("node.exe {flags} "))
+            .replace("--port", &format!("{patch}--port")));
+        options["ancestors"][1]["commandLine"] = serde_json::json!(shim
+            .replace(r#"node.exe" "#, &format!(r#"node.exe" {flags} "#))
+            .replace("--port", &format!("{patch}--port")));
+        assert_eq!(select(&options, None), vec![(103, 1001)]);
+        options["ancestors"][1]["commandLine"] = serde_json::json!(options["ancestors"][1]
+            ["commandLine"]
+            .as_str()
+            .unwrap()
+            .replace("8192", "4096"));
+        assert_eq!(select(&options, None), vec![]);
+        let mut reused_shim = chain.clone();
+        reused_shim["ancestors"][1]["created"] = serde_json::json!(1004);
+        assert_eq!(select(&reused_shim, None), vec![(102, 1002)]);
+        let mut nested = chain.clone();
+        nested["ancestors"].as_array_mut().unwrap().extend([
+            serde_json::json!({ "pid": 104, "created": 1000, "name": "cmd.exe", "commandLine": relay }),
+            serde_json::json!({ "pid": 105, "created": 999, "name": "node.exe", "commandLine": shim }),
+        ]);
+        assert_eq!(select(&nested, None), vec![(105, 999)]);
+        let duplicate = format!("{chain}\n{chain}");
+        assert_eq!(
+            orphan_harness_pids(duplicate.as_bytes(), bin, None),
+            vec![(103, 1001)]
         );
     }
 
