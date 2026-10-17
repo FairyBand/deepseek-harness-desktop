@@ -1,47 +1,43 @@
-//! Workspace 会话归属补丁：允许显式 attach 的会话使用不同于 Workspace 的 cwd。
-//!
-//! worktree 会话必须以隔离目录作为 `session.header.cwd`，但产品上仍应归属源项目的
-//! Workspace。上游 `@deepseek-ai/dsh-workspace` 同时在 attach、getter 与 mutate 三处按
-//! `cwd === workspace.path` 过滤，导致合法 worktree 会话只能落入“未分组”。本补丁仅
-//! 放宽显式 attach 后的归属保持；cwd 缺失、无法解析或不是目录的安全校验仍由上游保留。
+//! 保留显式关联到源工作区的工作树会话，不改变其隔离 cwd 与目录校验。
 
 use std::path::Path;
 
 use crate::utils::{patch_core_file, patch_dsh, PatchOutcome};
 
-// HARDCODE：以下锚点绑定 0.1.5-rc.1+ 内置 DSH 的压缩后源码；锚点变化时安全跳过并告警。
 const PATCH_MARKER: &str = "dsh-tauri-worktree: relaxed explicit workspace membership";
-const GETTER_ORIGINAL: &str =
-    "return this.record.sessionIds.filter((id) => this.host.sessionPath(id) === this.record.path);";
+// 0.2.1-alpha.5 将 sessionPath 比较改为 candidateMatches，需整组匹配避免局部放宽。
+const MEMBERSHIP_LAYOUTS: [(&str, &str); 2] = [
+    (
+        "return this.record.sessionIds.filter((id) => this.host.sessionPath(id) === this.record.path);",
+        "const sessionIds = changed.sessionIds.filter((id) => this.host.sessionPath(id) === changed.path);",
+    ),
+    (
+        "return this.record.sessionIds.filter((id) => this.host.candidateMatches(id, this.record.path));",
+        "const sessionIds = changed.sessionIds.filter((id) => this.host.candidateMatches(id, changed.path));",
+    ),
+];
 const GETTER_PATCHED: &str = "return this.record.sessionIds; /* dsh-tauri-worktree: relaxed explicit workspace membership */";
 const ATTACH_ORIGINAL: &str = "if (cwd !== this.record.path) throw new Error(`cannot attach session '${sessionId}' to workspace '${this.record.path}': its cwd resolves to '${cwd}'`);";
 const ATTACH_PATCHED: &str = "/* dsh-tauri-worktree: relaxed explicit workspace membership */";
-const MUTATE_ORIGINAL: &str = "const sessionIds = changed.sessionIds.filter((id) => this.host.sessionPath(id) === changed.path);";
 const MUTATE_PATCHED: &str = "const sessionIds = changed.sessionIds; /* dsh-tauri-worktree: relaxed explicit workspace membership */";
-
-/// 相对活动核心安装目录的 workspace `lib/index.js` 包内路径。
 const WORKSPACE_INDEX_JS: &str = "node_modules/@deepseek-ai/dsh-workspace/lib/index.js";
 
 fn patch_source(source: &str) -> PatchOutcome {
     if source.contains(PATCH_MARKER) {
         return PatchOutcome::AlreadyPatched;
     }
-    if !source.contains(GETTER_ORIGINAL)
-        || !source.contains(ATTACH_ORIGINAL)
-        || !source.contains(MUTATE_ORIGINAL)
-    {
+    let Some((getter, mutate)) = MEMBERSHIP_LAYOUTS.iter().find(|(getter, mutate)| {
+        source.contains(getter) && source.contains(mutate) && source.contains(ATTACH_ORIGINAL)
+    }) else {
         return PatchOutcome::AnchorMissing;
-    }
+    };
     let patched = source
-        .replacen(GETTER_ORIGINAL, GETTER_PATCHED, 1)
+        .replacen(getter, GETTER_PATCHED, 1)
         .replacen(ATTACH_ORIGINAL, ATTACH_PATCHED, 1)
-        .replacen(MUTATE_ORIGINAL, MUTATE_PATCHED, 1);
+        .replacen(mutate, MUTATE_PATCHED, 1);
     PatchOutcome::Patched(patched)
 }
 
-/// 对活动核心的 dsh-workspace `lib/index.js` 应用补丁（幂等）。
-/// 返回 Err 表示读/写失败；文件缺失、已打过、锚点变更均静默跳过（Ok）。
-/// 对显式给定的核心安装目录施加本补丁（E2E 编排复用，无需运行中的桌面端）。
 pub fn apply_at(core_dir: &Path) -> Result<(), String> {
     patch_core_file(core_dir, WORKSPACE_INDEX_JS, patch_source)
 }
@@ -53,33 +49,90 @@ pub fn apply(app_handle: &tauri::AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn fixture() -> String {
-        format!("{GETTER_ORIGINAL}\n{ATTACH_ORIGINAL}\n{MUTATE_ORIGINAL}\n")
+    const LEGACY_SOURCE: &str = r#"
+get sessionIds() {
+    return this.record.sessionIds.filter((id) => this.host.sessionPath(id) === this.record.path);
+}
+async attachSession(sessionId) {
+    if (header.cwd === void 0) throw new Error("missing cwd");
+    const cwd = await realpathNormalize(header.cwd);
+    if (!(await stat(cwd)).isDirectory()) throw new Error("not a directory");
+    if (cwd !== this.record.path) throw new Error(`cannot attach session '${sessionId}' to workspace '${this.record.path}': its cwd resolves to '${cwd}'`);
+    this.host.rememberSessionPath(sessionId, cwd);
+}
+async mutate(fn) {
+    const changed = fn(current);
+    const sessionIds = changed.sessionIds.filter((id) => this.host.sessionPath(id) === changed.path);
+}
+"#;
+    const ALPHA_SOURCE: &str = r#"
+get sessionIds() {
+    return this.record.sessionIds.filter((id) => this.host.candidateMatches(id, this.record.path));
+}
+async attachSession(sessionId) {
+    if (header.cwd === void 0) throw new Error("missing cwd");
+    const cwd = await realpathNormalize(header.cwd);
+    if (!(await stat(cwd)).isDirectory()) throw new Error("not a directory");
+    if (cwd !== this.record.path) throw new Error(`cannot attach session '${sessionId}' to workspace '${this.record.path}': its cwd resolves to '${cwd}'`);
+    this.host.rememberSessionPath(sessionId, cwd);
+}
+async mutate(fn) {
+    const changed = fn(current);
+    const sessionIds = changed.sessionIds.filter((id) => this.host.candidateMatches(id, changed.path));
+}
+"#;
+
+    #[test]
+    fn patches_all_three_membership_guards_in_supported_layouts() {
+        for source in [LEGACY_SOURCE, ALPHA_SOURCE] {
+            let PatchOutcome::Patched(patched) = patch_source(source) else {
+                panic!("expected patched source: {source}");
+            };
+            assert!(patched.contains("return this.record.sessionIds;"));
+            assert!(patched.contains("const sessionIds = changed.sessionIds;"));
+            assert!(!patched.contains(".filter("));
+            assert!(!patched.contains("if (cwd !== this.record.path)"));
+            assert!(
+                patched.contains("if (header.cwd === void 0) throw new Error(\"missing cwd\");")
+            );
+            assert!(patched.contains("const cwd = await realpathNormalize(header.cwd);"));
+            assert!(patched.contains(
+                "if (!(await stat(cwd)).isDirectory()) throw new Error(\"not a directory\");"
+            ));
+            assert!(patched.contains("this.host.rememberSessionPath(sessionId, cwd);"));
+        }
     }
 
     #[test]
-    fn patches_all_three_membership_guards() {
-        let PatchOutcome::Patched(patched) = patch_source(&fixture()) else {
-            panic!("expected patched source");
-        };
-        assert!(patched.contains(GETTER_PATCHED));
-        assert!(patched.contains(ATTACH_PATCHED));
-        assert!(patched.contains(MUTATE_PATCHED));
-        assert!(!patched.contains(GETTER_ORIGINAL));
-        assert!(!patched.contains(ATTACH_ORIGINAL));
-        assert!(!patched.contains(MUTATE_ORIGINAL));
-    }
-
-    #[test]
-    fn patch_is_idempotent() {
-        let PatchOutcome::Patched(patched) = patch_source(&fixture()) else {
-            panic!("expected patched source");
-        };
-        assert_eq!(patch_source(&patched), PatchOutcome::AlreadyPatched);
+    fn patch_is_idempotent_in_supported_layouts() {
+        for source in [LEGACY_SOURCE, ALPHA_SOURCE] {
+            let PatchOutcome::Patched(patched) = patch_source(source) else {
+                panic!("expected patched source: {source}");
+            };
+            assert_eq!(patch_source(&patched), PatchOutcome::AlreadyPatched);
+        }
     }
 
     #[test]
     fn skips_partial_upstream_layout() {
-        assert_eq!(patch_source(GETTER_ORIGINAL), PatchOutcome::AnchorMissing);
+        for source in [LEGACY_SOURCE, ALPHA_SOURCE] {
+            for line in source.lines().filter(|line| {
+                line.contains(".filter(") || line.contains("if (cwd !== this.record.path)")
+            }) {
+                assert_eq!(
+                    patch_source(&source.replace(line, "")),
+                    PatchOutcome::AnchorMissing
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skips_mixed_upstream_layout() {
+        let mixed = ALPHA_SOURCE.replace(
+            "this.host.candidateMatches(id, changed.path)",
+            "this.host.sessionPath(id) === changed.path",
+        );
+        assert_eq!(patch_source(&mixed), PatchOutcome::AnchorMissing);
     }
 }
