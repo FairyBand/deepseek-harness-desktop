@@ -64,6 +64,14 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-features --locked
 
 Use `git diff --check` for documentation-only edits. Tests must use isolated data, never real user profiles.
 
+## Reduced motion for chat following
+
+At desktop startup, the [patch](<../src-tauri/src/service/patch/scroll_follow.rs>) for compatible managed chat bundles ([#1114](https://github.com/dsh-tauri/deepseek-harness-desktop/issues/1114)) makes chat and process-group following use the existing `jump` path when the DSH document root has `data-reduce-motion` or the system requests `prefers-reduced-motion: reduce`. This also cancels an active smooth scroll. Normal startup, early startup and `--patch-core` are covered; missing files or changed upstream anchors are logged and skipped without rewriting unknown versions.
+
+The deployment owns the root attribute. This patch does not disable motion by default, inject CSS, or implement `?reduce-motion=0` / browser persistence. Official pages without the attribute retain smooth behavior unless the system requests reduced motion. Set the attribute inside the **DSH page / frame**; for a temporary check, run `document.documentElement.setAttribute('data-reduce-motion', '')` in that frame's console. Values `0` and `false` still count as present. Restore motion with `document.documentElement.removeAttribute('data-reduce-motion')` and a non-reduced system preference. Manual changes do not survive refresh and are read on the next follow call.
+
+The [regression tests](<../test/scroll-follow-patch.test.ts>) compare the released class with the production replacement; Rust tests run the same JavaScript contract on the actual `apply_at` file output. These are logic checks, not M5 / multi-display GPU measurements or full browser pagination coverage. Performance claims still need a same-device before/after comparison.
+
 ## Runtime isolation
 
 | Mode | Harness data | Store | Default loopback port |

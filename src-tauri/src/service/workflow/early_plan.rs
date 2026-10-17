@@ -250,6 +250,10 @@ pub(super) fn prepare(
             "conversation draft compatibility patch",
             patch::conversation_draft::apply_at,
         ),
+        (
+            "scroll follow reduced-motion patch",
+            patch::scroll_follow::apply_at,
+        ),
         ("mobile composer patch", patch::mobile_composer::apply_at),
         ("mobile sidebar patch", patch::mobile_sidebar::apply_at),
         ("SessionStore.remove patch", patch::session::apply_at),

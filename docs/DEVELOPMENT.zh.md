@@ -64,6 +64,14 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-features --locked
 
 文档修改使用 `git diff --check`。测试数据必须隔离，不能使用真实用户档案。
 
+## 聊天跟随的减弱动效
+
+桌面端启动时对兼容的托管聊天包施加[补丁](<../src-tauri/src/service/patch/scroll_follow.rs>)（[#1114](https://github.com/dsh-tauri/deepseek-harness-desktop/issues/1114)）：聊天和进程组的跟随滚动在 DSH 文档根节点存在 `data-reduce-motion` 或系统开启 `prefers-reduced-motion: reduce` 时，通过原有 `jump` 即时落位并取消正在进行的平滑滚动。常规启动、早启动与 `--patch-core` 均覆盖；缺文件或上游锚点变化时记录日志并跳过，不修改未知版本。
+
+该属性由部署方设置；本补丁不默认禁用动画，不注入 CSS，也不实现 `?reduce-motion=0` 或浏览器记忆。官方页面没有该属性且系统未要求减弱时，原有平滑行为保持不变。部署方应在 **DSH 页面 / 帧** 内设置；临时验证可在对应控制台执行 `document.documentElement.setAttribute('data-reduce-motion', '')`。属性值为 `0` 或 `false` 仍表示存在；恢复用 `document.documentElement.removeAttribute('data-reduce-motion')`，且系统偏好也必须关闭。手动设置不跨刷新保存，下一次跟随调用才读取新状态。
+
+[回归测试](<../test/scroll-follow-patch.test.ts>)对比原版与生产替换体；Rust 测试执行真实 `apply_at` 文件产物上的同一套 JavaScript 契约。它们验证逻辑，不代表 M5 / 多屏 GPU 实测，也不覆盖完整浏览器分页界面；性能结论仍需同设备前后对照。
+
 ## 运行时隔离
 
 | 模式 | Harness 数据 | Store | 默认回环端口 |
