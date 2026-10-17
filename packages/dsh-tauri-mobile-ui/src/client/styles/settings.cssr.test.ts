@@ -2,10 +2,10 @@ import type { Rule } from 'postcss'
 import postcss from 'postcss'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cssr } from '../../../../dsh-tauri-ui/src/client/utils/cssr'
-import { MOBILE_MEDIA_QUERIES } from '../../../../dsh-tauri/src/client/utils/device'
+import { MOBILE_POINTER_QUERIES } from '../../../../dsh-tauri/src/client/utils/device'
 import settingsStyle from './settings.cssr'
 
-vi.mock('dsh-tauri/client', () => ({ MOBILE_MEDIA_QUERIES }))
+vi.mock('dsh-tauri/client', () => ({ MOBILE_POINTER_QUERIES }))
 vi.mock('dsh-tauri-ui/client', () => ({ cssr }))
 
 afterEach(() => vi.restoreAllMocks())

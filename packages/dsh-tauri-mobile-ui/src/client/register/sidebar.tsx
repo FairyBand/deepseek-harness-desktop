@@ -7,6 +7,7 @@ import {
   detectMobileDevice,
   invokeParent,
   listenParent,
+  MOBILE_BREAKPOINT,
   MOBILE_MEDIA_QUERIES,
 } from 'dsh-tauri/client'
 import { useSyncExternalStore } from 'react'
@@ -19,7 +20,6 @@ import { getMobileSessionId, getMobileSessionTitle } from '../service/sidebar-se
 const SHELL_OVERLAY_SLOT = 'shell.overlay'
 const SIDEBAR_TOGGLE_COMMAND = 'dsh://sidebar:toggle'
 const SIDEBAR_COLLAPSED_EVENT = 'dsh://sidebar:collapsed'
-const SIDEBAR_BREAKPOINT = 1024
 const SIDEBAR_PROPERTIES = [
   '--dsh-mobile-sidebar-width',
   '--dsh-mobile-sidebar-offset',
@@ -58,7 +58,7 @@ function getFrame(): HTMLElement | null {
 
 function canOwnMobileSidebar(): boolean {
   const frame = getFrame()
-  return detectMobileDevice() && window.innerWidth < SIDEBAR_BREAKPOINT
+  return detectMobileDevice() && window.innerWidth < MOBILE_BREAKPOINT
     && (frame === null || frame.hasAttribute('data-rightbar-collapsed'))
 }
 

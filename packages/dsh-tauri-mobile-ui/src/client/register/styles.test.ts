@@ -3,11 +3,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import desktopStyle from '../../../../dsh-tauri-ui/src/client/styles/global.cssr'
 import { cssr } from '../../../../dsh-tauri-ui/src/client/utils/cssr'
 import { mountStyle } from '../../../../dsh-tauri-ui/src/client/utils/style'
-import { MOBILE_MEDIA_QUERIES } from '../../../../dsh-tauri/src/client/utils/device'
+import { MOBILE_MEDIA_QUERIES, MOBILE_POINTER_QUERIES } from '../../../../dsh-tauri/src/client/utils/device'
 import { registerStyles } from './styles'
 
 vi.mock('dsh-tauri/client', () => ({
   MOBILE_MEDIA_QUERIES,
+  MOBILE_POINTER_QUERIES,
   defineRegister: (setup: (controller: unknown) => void) => () => {
     const disposers: Array<() => void> = []
     setup({ add: (dispose: () => void) => disposers.push(dispose) })
@@ -28,7 +29,7 @@ it('owns mobile styles and composer activation until unload, and can reload clea
     const dispose = register()
     const style = document.querySelector('style[cssr-id="dsh-tauri-mobile-ui-styles"]')
     expect(style?.getAttribute('data-plugin')).toBe('dsh-tauri-mobile-ui')
-    expect(style?.textContent).toContain('@media (hover: none) and (any-pointer: coarse) and (any-hover: none)')
+    expect(style?.textContent).toContain('@media (hover: none) and (any-pointer: coarse) and (any-hover: none) and (max-width: 1023px)')
     for (const selector of [
       '[data-dsh-mobile-preferences]',
       '[data-slot="conversation.composer.bar"] [class$="_dock"]',

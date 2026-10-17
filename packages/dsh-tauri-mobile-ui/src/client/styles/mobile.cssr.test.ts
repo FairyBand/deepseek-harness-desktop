@@ -7,15 +7,17 @@ import mobileStyle from './mobile.cssr'
 vi.mock('dsh-tauri/client', () => ({ MOBILE_MEDIA_QUERIES }))
 vi.mock('dsh-tauri-ui/client', () => ({ cssr }))
 
+const MOBILE_MEDIA = '(hover: none) and (any-pointer: coarse) and (any-hover: none) and (max-width: 1023px)'
+
 describe('mobile conversation layout', () => {
   const root = postcss.parse(mobileStyle.render())
 
-  it('keeps the existing mobile layout overrides scoped to touch devices', () => {
-    const media = root.nodes.find(node => node.type === 'atrule' && node.name === 'media' && node.params === '(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+  it('keeps the existing mobile layout overrides scoped to narrow touch devices', () => {
+    const media = root.nodes.find(node => node.type === 'atrule' && node.name === 'media' && node.params === MOBILE_MEDIA)
     expect(media?.type).toBe('atrule')
     if (media?.type !== 'atrule')
       throw new Error('Missing mobile media query')
-    expect(media.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+    expect(media.params).toBe(MOBILE_MEDIA)
     const css = media.toString()
     for (const selector of [
       '[data-dsh-mobile-preferences]',
@@ -82,7 +84,7 @@ describe('mobile conversation layout', () => {
       rules.push(rule)
       expect(rule.parent?.type).toBe('atrule')
       if (rule.parent?.type === 'atrule')
-        expect(rule.parent.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+        expect(rule.parent.params).toBe(MOBILE_MEDIA)
     })
     expect(rules).toHaveLength(1)
   })
@@ -193,7 +195,7 @@ describe('mobile conversation layout', () => {
       rules.push(rule)
       expect(rule.parent?.type).toBe('atrule')
       if (rule.parent?.type === 'atrule')
-        expect(rule.parent.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+        expect(rule.parent.params).toBe(MOBILE_MEDIA)
     })
     expect(rules).toHaveLength(1)
   })
@@ -205,7 +207,7 @@ describe('mobile conversation layout', () => {
       rules.push(rule)
       expect(rule.parent?.type).toBe('atrule')
       if (rule.parent?.type === 'atrule')
-        expect(rule.parent.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+        expect(rule.parent.params).toBe(MOBILE_MEDIA)
     })
     expect(rules).toHaveLength(1)
   })
@@ -217,7 +219,7 @@ describe('mobile conversation layout', () => {
       rules.push(rule)
       expect(rule.parent?.type).toBe('atrule')
       if (rule.parent?.type === 'atrule')
-        expect(rule.parent.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+        expect(rule.parent.params).toBe(MOBILE_MEDIA)
     })
     expect(rules).toHaveLength(1)
   })
@@ -228,7 +230,7 @@ describe('mobile conversation layout', () => {
       const parent = rule.parent
       expect(parent?.type).toBe('atrule')
       if (parent?.type === 'atrule')
-        expect(parent.params).toBe('(hover: none) and (any-pointer: coarse) and (any-hover: none)')
+        expect(parent.params).toBe(MOBILE_MEDIA)
       rule.walkDecls((decl) => {
         declarations.push([decl.prop, decl.value, decl.important])
       })

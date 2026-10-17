@@ -32,16 +32,24 @@ const host = globalThis as unknown as MatchMediaHost
 const originalWindow = host.window
 const disposers: Array<() => void> = []
 
-/** 手机端才有三条设备查询全部成立；触屏为主但另接鼠标的设备缺 `(any-hover: none)`。 */
+/** 手机端才有三条设备查询加窄屏门槛全部成立；触屏为主但另接鼠标的设备缺 `(any-hover: none)`。 */
 const MOBILE_DEVICE = {
   '(hover: none)': true,
   '(any-pointer: coarse)': true,
   '(any-hover: none)': true,
+  '(max-width: 1023px)': true,
 }
 const TOUCHSCREEN_WITH_MOUSE = {
   '(hover: none)': true,
   '(any-pointer: coarse)': true,
   '(any-hover: none)': false,
+}
+/** issue #1128：触屏笔记本命中三条指针查询，但宽度在 1024px 以上仍走桌面布局。 */
+const TOUCHSCREEN_DESKTOP = {
+  '(hover: none)': true,
+  '(any-pointer: coarse)': true,
+  '(any-hover: none)': true,
+  '(max-width: 1023px)': false,
 }
 
 function stubDevice(answers: Record<string, boolean>): void {
@@ -127,6 +135,19 @@ describe('registerSettings launcher seat', () => {
   /** 触屏为主但接了鼠标的设备仍有鼠标可用：不能被手机端判据误伤。 */
   it('keeps the own sidebar on a touchscreen with a secondary mouse', () => {
     stubDevice(TOUCHSCREEN_WITH_MOUSE)
+
+    const { injected } = activate()
+
+    expect(injected.map(entry => entry.key)).toEqual([
+      'shell.overlay',
+      'sidebar.settings',
+      'settings.launcher',
+    ])
+  })
+
+  /** 触屏笔记本在桌面宽度下仍可用鼠标式设置面板：不能被手机端判据误伤。 */
+  it('keeps the own sidebar on a touchscreen desktop window', () => {
+    stubDevice(TOUCHSCREEN_DESKTOP)
 
     const { injected } = activate()
 

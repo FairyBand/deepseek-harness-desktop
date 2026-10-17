@@ -8,8 +8,9 @@ const LEGACY_MOBILE: &str = r#"function isDshMobileComposer() {
     return typeof window !== "undefined" && typeof window.matchMedia === "function" && ["(hover: none)", "(any-pointer: coarse)", "(any-hover: none)"].every(query => window.matchMedia(query).matches);
 }
 "#;
+/// issue #1128：指针查询在触屏桌面上同样成立，必须叠加与官方布局一致的 1024px 门槛。
 const MOBILE: &str = r#"function isDshMobileComposer() {
-    return typeof document !== "undefined" && document.documentElement.hasAttribute("data-dsh-mobile-ui") && typeof window.matchMedia === "function" && ["(hover: none)", "(any-pointer: coarse)", "(any-hover: none)"].every(query => window.matchMedia(query).matches);
+    return typeof document !== "undefined" && document.documentElement.hasAttribute("data-dsh-mobile-ui") && typeof window.matchMedia === "function" && window.innerWidth < 1024 && ["(hover: none)", "(any-pointer: coarse)", "(any-hover: none)"].every(query => window.matchMedia(query).matches);
 }
 "#;
 const KEYMAP: &str = "function registerComposerKeymap(editor, handlers) {";
@@ -84,6 +85,7 @@ mod tests {
             panic!("not patched")
         };
         assert!(result.contains(MOBILE));
+        assert!(result.contains("window.innerWidth < 1024"));
         assert!(result.contains(ENTER_PATCHED));
         assert!(result.contains(AUTOFOCUS_PATCHED));
         assert!(result.contains(ROOT_PATCHED));
