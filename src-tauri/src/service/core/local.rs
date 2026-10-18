@@ -366,9 +366,6 @@ fn local_core_uses_pnpm<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
     !npm_layout && pnpm_layout
 }
 
-/// 通过用户包管理器 CLI 更新本地核心（npm `update -g` / pnpm `add -g`）。
-///
-/// 返回更新后的版本号。失败返回错误（附进程输出尾部，便于排查）。
 pub async fn update_local_core<R: Runtime>(app_handle: AppHandle<R>) -> Result<String, String> {
     let _transition_guard = crate::service::workflow::acquire_core_transition().await?;
     crate::service::workflow::instances::require_exclusive_profile()?;
@@ -403,28 +400,11 @@ pub async fn update_local_core<R: Runtime>(app_handle: AppHandle<R>) -> Result<S
     log::info!("Updating local dsh core at {}", core.package_dir.display());
 
     let uses_pnpm = local_core_uses_pnpm(&app_handle);
-    // 更新到最新：pnpm 用 `add -g @latest`，npm 用 `install -g @latest`
-    // （npm update 对已固定版本号的安装可能不生效，install @latest 才能升级）
-    let (pm, args): (&str, Vec<String>) = if uses_pnpm {
-        (
-            "pnpm",
-            vec![
-                "add".to_string(),
-                "-g".to_string(),
-                "@deepseek-ai/dsh@latest".to_string(),
-            ],
-        )
+    let (pm, action) = if uses_pnpm {
+        ("pnpm", "add")
     } else {
-        (
-            "npm",
-            vec![
-                "install".to_string(),
-                "-g".to_string(),
-                "@deepseek-ai/dsh@latest".to_string(),
-            ],
-        )
+        ("npm", "install")
     };
-    log::info!("Updating local dsh core via `{pm} {args:?}`");
 
     // GUI 进程下 npm/pnpm 均以控制台程序方式派生子进程，Windows 上需隐藏窗口
     let program = if cfg!(windows) {
@@ -432,21 +412,57 @@ pub async fn update_local_core<R: Runtime>(app_handle: AppHandle<R>) -> Result<S
     } else {
         pm.to_string()
     };
-    let (status, stdout, stderr) = tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(&program);
-        cmd.args(&args);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        match cmd.output() {
-            Ok(out) => (out.status.success(), out.stdout, out.stderr),
-            Err(e) => (false, Vec::new(), format!("spawn failed: {e}").into_bytes()),
-        }
-    })
-    .await
-    .map_err(|e| format!("CORE_UPDATE_JOIN: {e}"))?;
+    let (target_version, status, stdout, stderr) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut query = std::process::Command::new(&program);
+            query.args([
+                "view",
+                "@deepseek-ai/dsh@latest",
+                "version",
+                "--json",
+                "--prefer-online",
+            ]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                query.creation_flags(0x0800_0000);
+            }
+            let output = query
+                .output()
+                .map_err(|e| format!("CORE_UPDATE_TARGET_FAILED: {e}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "CORE_UPDATE_TARGET_FAILED: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+                .map_err(|e| format!("CORE_UPDATE_TARGET_INVALID: {e}"))?;
+            let target_version = match &metadata {
+                serde_json::Value::String(version) => Some(version.as_str()),
+                serde_json::Value::Array(versions) if versions.len() == 1 => versions[0].as_str(),
+                _ => None,
+            }
+            .ok_or_else(|| "CORE_UPDATE_TARGET_INVALID: expected one version".to_string())?
+            .to_string();
+            semver::Version::parse(&target_version)
+                .map_err(|e| format!("CORE_UPDATE_TARGET_INVALID: {e}"))?;
+            let package = format!("@deepseek-ai/dsh@{target_version}");
+            log::info!("Updating local dsh core via `{pm} {action} -g {package}`");
+            let mut cmd = std::process::Command::new(&program);
+            cmd.args([action, "-g", &package]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            match cmd.output() {
+                Ok(out) => Ok((target_version, out.status.success(), out.stdout, out.stderr)),
+                Err(e) => Err(format!("CORE_UPDATE_FAILED: spawn failed: {e}")),
+            }
+        })
+        .await
+        .map_err(|e| format!("CORE_UPDATE_JOIN: {e}"))??;
 
     let tail = |bytes: Vec<u8>| -> String {
         String::from_utf8_lossy(&bytes)
@@ -466,14 +482,15 @@ pub async fn update_local_core<R: Runtime>(app_handle: AppHandle<R>) -> Result<S
         return Err(format!("CORE_UPDATE_FAILED: {output}"));
     }
 
-    // 更新成功后按新包目录回读版本
-    let version = local_core(&app_handle)
-        .map(|c| c.version)
-        .unwrap_or_default();
-    if version.is_empty() {
-        log::warn!("Local core updated but version could not be re-read");
+    let version = local_core(&app_handle).map(|c| c.version);
+    if version.as_deref() != Some(target_version.as_str()) {
+        return Err(format!(
+            "CORE_UPDATE_VERSION_MISMATCH: expected {target_version}, detected {} at {}",
+            version.as_deref().unwrap_or("unknown"),
+            core.package_dir.display(),
+        ));
     }
-    Ok(version)
+    Ok(target_version)
 }
 
 #[cfg(test)]

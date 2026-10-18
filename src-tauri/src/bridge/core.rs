@@ -44,8 +44,6 @@ pub async fn remove_core(app_handle: AppHandle, id: String) -> Result<(), String
     core::remove_version(&app_handle, &id).await
 }
 
-/// 通过用户包管理器 CLI 更新本地核心（npm `install -g @latest` /
-/// pnpm `add -g @latest`），返回更新后的版本号。
 #[tauri::command]
 pub async fn update_local_core(
     window: tauri::WebviewWindow,
