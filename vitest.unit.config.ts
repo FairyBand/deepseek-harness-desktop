@@ -29,7 +29,7 @@ export default defineProject({
   test: {
     name: 'unit',
     server: {
-      deps: { inline: ['@deepseek-ai/dsh-client-ui-primitives'] },
+      deps: { inline: ['@deepseek-ai/dsh-client-ui-primitives', 'dsh-pet-component'] },
     },
     include: [
       'packages/**/*.{test,spec}.{ts,tsx,js,mjs,cjs}',

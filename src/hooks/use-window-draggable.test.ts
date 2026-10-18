@@ -226,12 +226,11 @@ describe('useWindowDraggable', () => {
     expect(result.current.dragging).toBe(true)
   })
 
-  it('方向按相邻样本的水平位移判定，拖拽停顿时归零', async () => {
+  it('方向按累计水平位移判定，拖拽停顿时归零', async () => {
     const { result } = renderHook(() => useDraggable())
 
     await startDrag(result.current, 12)
-    // 越过门槛的那一帧没有上一个样本，方向先不判定（与上游轨迹语义一致）。
-    expect(result.current.direction).toBeUndefined()
+    expect(result.current.direction).toBe('right')
 
     emitCursor(CURSOR.x + 16, CURSOR.y)
     expect(result.current.direction).toBe('right')
@@ -247,6 +246,34 @@ describe('useWindowDraggable', () => {
 
     emitCursor(CURSOR.x + 20, CURSOR.y)
     expect(result.current.direction).toBe('right')
+  })
+
+  it.each([1, 2])('缩放=%s 时慢速拖动累计水平位移后更新方向，反向也能识别', async (scale) => {
+    vi.stubGlobal('devicePixelRatio', scale)
+    const { result } = renderHook(() => useDraggable())
+
+    await startDrag(result.current, 0, 12 * scale)
+    expect(result.current.direction).toBeUndefined()
+
+    for (let step = 1; step < 3 * scale; step += 1) {
+      emitCursor(CURSOR.x - step, CURSOR.y + 12 * scale)
+      expect(result.current.direction).toBeUndefined()
+    }
+    emitCursor(CURSOR.x - 3 * scale, CURSOR.y + 12 * scale)
+    expect(result.current.direction).toBe('left')
+
+    for (let step = 1; step < 3 * scale; step += 1) {
+      emitCursor(CURSOR.x - 3 * scale + step, CURSOR.y + 12 * scale)
+      expect(result.current.direction).toBe('left')
+    }
+    emitCursor(CURSOR.x, CURSOR.y + 12 * scale)
+    expect(result.current.direction).toBe('right')
+  })
+
+  it('首个有效拖动样本向左时立即朝左', async () => {
+    const { result } = renderHook(() => useDraggable())
+    await startDrag(result.current, -12)
+    expect(result.current.direction).toBe('left')
   })
 
   it('pointerup 收尾，且只认同一个 pointerId', async () => {

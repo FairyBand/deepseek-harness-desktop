@@ -159,6 +159,7 @@
     "dsh-h3": "catalog:",
     "eslint": "catalog:lint",
     "eslint-plugin-react-refresh": "catalog:lint",
+    "fake-indexeddb": "catalog:",
     "h3": "catalog:",
     "immer": "catalog:testing",
     "jsdom": "catalog:testing",

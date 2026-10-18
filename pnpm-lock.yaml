@@ -68,6 +68,9 @@ catalogs:
     dsh-h3:
       specifier: 0.2.1
       version: 0.2.1
+    fake-indexeddb:
+      specifier: ^6.2.6
+      version: 6.2.6
     h3:
       specifier: 2.0.1
       version: 2.0.1
@@ -487,6 +490,7 @@ catalogs:
 patchedDependencies:
   '@tauri-apps/plugin-http@2.6.0': 6bbec7f8a8e969a867d222e8b2b542d2dbd639ffbaf2184a4df47f330b6ad431
   bumpp: ea42dd1273f65a02e22aa9c25e39361c8dac2320ed2fbff9c58d2bd3f46a40a3
+  dsh-pet-component@0.2.5: bc78110c62c900ae95f521e415f4c491503e89d69d81406def275b0566cfdfee
 
 importers:
 
@@ -533,7 +537,7 @@ importers:
         version: 2.4.4
       dsh-pet-component:
         specifier: catalog:runtime
-        version: 0.2.5(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8)
+        version: 0.2.5(patch_hash=bc78110c62c900ae95f521e415f4c491503e89d69d81406def275b0566cfdfee)(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8)
       expo:
         specifier: catalog:native
         version: 57.0.26(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(@expo/metro-runtime@57.0.16)(expo-router@57.0.24)(react-dom@19.2.8(react@19.2.8))(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8))(react-native-worklets@0.10.1(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8))(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8)(typescript@5.8.3)
@@ -850,6 +854,9 @@ importers:
       eslint-plugin-react-refresh:
         specifier: catalog:lint
         version: 0.5.4(eslint@10.8.1(jiti@2.7.0))
+      fake-indexeddb:
+        specifier: 'catalog:'
+        version: 6.2.6
       h3:
         specifier: 'catalog:'
         version: 2.0.1
@@ -6579,6 +6586,10 @@ packages:
     resolution: {integrity: sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg==}
     engines: {node: '>= 10.17.0'}
     hasBin: true
+
+  fake-indexeddb@6.2.6:
+    resolution: {integrity: sha512-ihhmr0KoET51jT8R4YhbUYuLLvr1qqO6INISygtN16i8loR8kAxtAUr4+EKHTSMjL+lggaAn4OC7DRqzrNgnuQ==}
+    engines: {node: '>=18'}
 
   fast-deep-equal@2.0.1:
     resolution: {integrity: sha512-bCK/2Z4zLidyB4ReuIsvALH6w31YfAQDmXMqMx6FyfHqvBxtjC0eRumeSu4Bs3XtXwpyIywtSTrVT99BxY1f9w==}
@@ -14576,7 +14587,7 @@ snapshots:
       - crossws
       - ocache
 
-  dsh-pet-component@0.2.5(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8):
+  dsh-pet-component@0.2.5(patch_hash=bc78110c62c900ae95f521e415f4c491503e89d69d81406def275b0566cfdfee)(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8):
     dependencies:
       '@gravity-ui/icons': 2.21.0(react@19.2.8)
       '@reause/core': 0.1.7(react@19.2.8)
@@ -15453,6 +15464,8 @@ snapshots:
       '@types/yauzl': 2.10.3
     transitivePeerDependencies:
       - supports-color
+
+  fake-indexeddb@6.2.6: {}
 
   fast-deep-equal@2.0.1: {}
 

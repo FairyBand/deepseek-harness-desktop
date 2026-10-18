@@ -105,8 +105,7 @@ interface Gesture {
   vy: number
   /** 是否越过手势门槛（门槛前窗口不动，位移由门槛后的弹簧按原点补齐）。 */
   engaged: boolean
-  /** 方向判定用的上一个样本（上游拿轨迹末段比较）。 */
-  lastSample: { x: number, y: number } | undefined
+  directionAnchor: { x: number, y: number } | undefined
 }
 
 /**
@@ -298,7 +297,7 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
       vx: 0,
       vy: 0,
       engaged: false,
-      lastSample: undefined,
+      directionAnchor: latest === undefined ? undefined : { x: latest.x, y: latest.y },
     }
     gestureRef.current = gesture
     // 按下即开始兜底计时：设备流与指针事件同时中断时也能收尾。
@@ -332,7 +331,7 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
     if (gesture.anchor === undefined) {
       // 设备流首个样本：手势原点顺延到这里（按下时还没有样本，等价于从此刻起跟手）。
       gesture.anchor = { x: payload.x, y: payload.y }
-      gesture.lastSample = { x: payload.x, y: payload.y }
+      gesture.directionAnchor = { x: payload.x, y: payload.y }
       return
     }
     const scale = globalThis.devicePixelRatio || 1
@@ -351,10 +350,11 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
       setDragging(true)
       rafRef.current?.resume()
     }
-    const last = gesture.lastSample
-    if (last !== undefined && Math.abs(payload.x - last.x) >= DRAG_DIRECTION_THRESHOLD * scale)
+    const last = gesture.directionAnchor
+    if (last !== undefined && Math.abs(payload.x - last.x) >= DRAG_DIRECTION_THRESHOLD * scale) {
       setDirection(payload.x > last.x ? 'right' : 'left')
-    gesture.lastSample = { x: payload.x, y: payload.y }
+      gesture.directionAnchor = { x: payload.x, y: payload.y }
+    }
     armDirectionTimer()
   })
 
