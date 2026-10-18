@@ -174,7 +174,7 @@ export function enrichInstalled(list: DshPlugin[]): Plugin[] {
       description: item.description,
       repoUrl: item.repo_url,
       bundled: item.bundled,
-      patchDisabled: item.patchDisabled,
+      disabled: item.disabled,
       recommended: item.recommended,
       fix: item.fix,
       internal: item.internal,

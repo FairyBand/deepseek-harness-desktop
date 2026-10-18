@@ -2,7 +2,13 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 
+/// 原子替换 patch 层：拒绝覆盖符号链接（patch 会被用户手写，链接等于绕过范围校验）。
 pub(super) fn write_patch_layer_atomically(path: &Path, rendered: &str) -> io::Result<()> {
+    write_file_atomically(path, rendered)
+}
+
+/// 经同目录临时文件原子替换 UTF-8 文件；失败时保留原文件。
+pub(super) fn write_file_atomically(path: &Path, rendered: &str) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(io::Error::new(

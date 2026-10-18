@@ -45,11 +45,11 @@ pub struct DshPlugin {
     pub repo_url: String,
     /// 是否在 `dsh.profile.bundles` 中（启动时自动加载）
     pub bundled: bool,
-    /// 是否在 profile 的 `cordis.patch.yml` 中被禁用（`disabled: true`）。
+    /// 插件开关状态：profile `cordis.patch.yml` 里的 `disabled` 覆盖，或已安装的
+    /// bundle 包被移出 `dsh.profile.bundles`（官方 Plugins 页的包级禁用）。
     ///
-    /// 这是插件开关的唯一状态，与官方 Plugins 页 / dshmarket 共用：`bundled`
-    /// 只表示是否在 `dsh.profile.bundles` 中被自动加载，不代表用户开关。
-    pub patch_disabled: bool,
+    /// 与官方 Plugins 页 / dshmarket 共用同一处状态，桌面壳不维护第二份记录。
+    pub disabled: bool,
     /// 预设清单中的「推荐」标记（绿色 chip）
     pub recommended: bool,
     /// 预设清单中的「修复」标记（黄色 chip）
@@ -84,6 +84,15 @@ struct PluginPackageJson {
     homepage: Option<String>,
     #[serde(default)]
     repository: Option<RepositoryField>,
+    #[serde(default)]
+    dsh: Option<PluginDshField>,
+}
+
+/// `package.json` 的 `dsh` 段：只关心是否声明了 `bundle`（用于判定官方包级禁用）。
+#[derive(Deserialize, Default)]
+struct PluginDshField {
+    #[serde(default)]
+    bundle: Option<serde_json::Value>,
 }
 
 /// repository 字段兼容两种形态：字符串 URL 或 `{ "type": "git", "url": ... }` 对象
@@ -154,10 +163,6 @@ pub(crate) fn parse_plugins(profile: &Path, presets: &[PreinstallPluginInfo]) ->
         .map(|p| installed_name(p).to_string())
         .collect();
 
-    // 插件开关的唯一状态：`cordis.patch.yml` 顶层 `disabled: true` 条目（与官方
-    // Plugins 页 / dshmarket 共用）。
-    let patch_disabled_set = crate::service::plugin::disable::load_patch_disabled(profile);
-
     let mut dep_ids: Vec<&String> = manifest.dependencies.keys().collect();
     // 稳定排序：启动加载（bundles）的插件在前，其余按 id 字典序
     dep_ids.sort_by_key(|id| (!bundled.contains(id.as_str()), id.as_str()));
@@ -182,7 +187,9 @@ pub(crate) fn parse_plugins(profile: &Path, presets: &[PreinstallPluginInfo]) ->
                 .and_then(|m| m.name.clone())
                 .or_else(|| preset.map(|p| p.name.clone()))
                 .unwrap_or_else(|| id.clone());
-            let patch_disabled_by_name = patch_disabled_set.contains(name.as_str());
+            let installed_bundle = meta
+                .as_ref()
+                .is_some_and(|m| m.dsh.as_ref().and_then(|dsh| dsh.bundle.as_ref()).is_some());
             DshPlugin {
                 id: id.clone(),
                 name,
@@ -197,7 +204,8 @@ pub(crate) fn parse_plugins(profile: &Path, presets: &[PreinstallPluginInfo]) ->
                     .unwrap_or_default(),
                 repo_url,
                 bundled: bundled.contains(id.as_str()),
-                patch_disabled: patch_disabled_set.contains(id.as_str()) || patch_disabled_by_name,
+                disabled: crate::service::plugin::disable::has_patch_disable(profile, id)
+                    || (installed_bundle && !bundled.contains(id.as_str())),
                 recommended: preset.map(|p| p.recommended).unwrap_or(false),
                 fix: preset.map(|p| p.fix).unwrap_or(false),
                 internal: internal_names.contains(id.as_str()),
@@ -527,7 +535,7 @@ mod tests {
             description: String::new(),
             repo_url: String::new(),
             bundled: true,
-            patch_disabled: false,
+            disabled: false,
             recommended: false,
             fix: false,
             internal: false,
@@ -559,7 +567,7 @@ mod tests {
             description: String::new(),
             repo_url: String::new(),
             bundled: true,
-            patch_disabled: false,
+            disabled: false,
             recommended: false,
             fix: false,
             internal: false,
@@ -605,10 +613,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 三种状态由 `bundled`（是否在 `dsh.profile.bundles`）与 patch 禁用共同决定：
-    /// - 在 bundles 且未被 patch 禁用 → bundled=true, patch_disabled=false（正常加载）
-    /// - 不在 bundles 但被 patch 禁用 → bundled=false, patch_disabled=true（已禁用，可启用）
-    /// - 不在 bundles 且未被 patch 禁用 → bundled=false, patch_disabled=false（未加载）
+    /// 安装后的三种状态：
+    /// - 在 bundles 且无禁用覆盖 → bundled=true, disabled=false（正常加载）
+    /// - bundle 包不在 bundles（官方包级开关禁用）→ bundled=false, disabled=true（已禁用）
+    /// - 非 bundle 依赖且不在 bundles → bundled=false, disabled=false（未加载）
     #[test]
     fn parse_plugins_distinguishes_disabled_from_unloaded() {
         let dir = std::env::temp_dir().join(format!("dsh-watch-disabled-{}", std::process::id()));
@@ -629,32 +637,31 @@ mod tests {
             serde_json::to_string_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        for id in ["dsh-loaded", "dsh-disabled", "dsh-unloaded"] {
+        for (id, declares_bundle) in [
+            ("dsh-loaded", true),
+            ("dsh-disabled", true),
+            ("dsh-unloaded", false),
+        ] {
             let pkg_dir = dir.join("node_modules").join(id);
             std::fs::create_dir_all(&pkg_dir).unwrap();
-            std::fs::write(
-                pkg_dir.join("package.json"),
-                format!(r#"{{"name":"{id}"}}"#),
-            )
-            .unwrap();
+            let meta = if declares_bundle {
+                serde_json::json!({ "name": id, "version": "1.0.0", "dsh": { "bundle": {} } })
+            } else {
+                serde_json::json!({ "name": id, "version": "1.0.0" })
+            };
+            std::fs::write(pkg_dir.join("package.json"), meta.to_string()).unwrap();
         }
-        // 仅 dsh-disabled 在 patch 里被禁用。
-        std::fs::write(
-            dir.join("cordis.patch.yml"),
-            "- id: dsh-disabled\n  disabled: true\n",
-        )
-        .unwrap();
 
         let plugins = parse_plugins(&dir, &[]);
         let loaded = plugins.iter().find(|p| p.id == "dsh-loaded").unwrap();
         assert!(loaded.bundled);
-        assert!(!loaded.patch_disabled);
+        assert!(!loaded.disabled);
         let disabled_plugin = plugins.iter().find(|p| p.id == "dsh-disabled").unwrap();
         assert!(!disabled_plugin.bundled);
-        assert!(disabled_plugin.patch_disabled);
+        assert!(disabled_plugin.disabled);
         let unloaded = plugins.iter().find(|p| p.id == "dsh-unloaded").unwrap();
         assert!(!unloaded.bundled);
-        assert!(!unloaded.patch_disabled);
+        assert!(!unloaded.disabled);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -684,11 +691,11 @@ mod tests {
         .unwrap();
         let plugins = parse_plugins(&dir, &presets_for_test());
         let market = plugins.iter().find(|p| p.id == "dshmarket").unwrap();
-        assert!(market.patch_disabled);
+        assert!(market.disabled);
         let pet = plugins.iter().find(|p| p.id == "dsh-tauri-pet").unwrap();
-        assert!(!pet.patch_disabled);
+        assert!(!pet.disabled);
         let other = plugins.iter().find(|p| p.id == "dsh-other").unwrap();
-        assert!(!other.patch_disabled);
+        assert!(!other.disabled);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -714,7 +721,69 @@ mod tests {
             .iter()
             .find(|p| p.id == "dsh-better-sidebar")
             .unwrap();
-        assert!(sidebar.patch_disabled);
+        assert!(sidebar.disabled);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 官方 Plugins 页的包级禁用 = 把 bundle 包移出 `dsh.profile.bundles`；
+    /// 桌面插件列表必须显示为已禁用（issue 回归）。
+    #[test]
+    fn parse_plugins_marks_bundle_deselected_as_disabled() {
+        let dir = build_profile(
+            "bundle-deselected",
+            &[(
+                "dshmarket",
+                r#"{"name":"dshmarket","version":"1.13.1","dsh":{"bundle":{}}}"#,
+            )],
+        );
+        let manifest_path = dir.join("package.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["dsh"]["profile"]["bundles"] = serde_json::json!([]);
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let plugins = parse_plugins(&dir, &[]);
+        let market = plugins.iter().find(|p| p.id == "dshmarket").unwrap();
+        assert!(!market.bundled);
+        assert!(market.disabled);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 官方行级开关写入的是 loader entry id（`dsh-market`），不是 npm 包名。
+    #[test]
+    fn parse_plugins_marks_entry_id_patch_disable() {
+        let dir = build_profile(
+            "entry-id",
+            &[(
+                "dshmarket",
+                r#"{"name":"dshmarket","version":"1.13.1","dsh":{"bundle":{"patch":"./cordis.patch.yml"}}}"#,
+            )],
+        );
+        std::fs::write(
+            dir.join("node_modules/dshmarket/cordis.patch.yml"),
+            "- insert:\n    - id: dsh-market\n      name: dshmarket\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("cordis.patch.yml"),
+            "- id: dsh-market\n  disabled: true\n",
+        )
+        .unwrap();
+
+        let plugins = parse_plugins(&dir, &[]);
+        assert!(
+            plugins
+                .iter()
+                .find(|p| p.id == "dshmarket")
+                .unwrap()
+                .disabled
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

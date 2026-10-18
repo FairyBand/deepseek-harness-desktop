@@ -21,8 +21,8 @@ export interface DshPlugin {
   repo_url: string
   /** 是否在 dsh.profile.bundles 中（启动时自动加载） */
   bundled: boolean
-  /** 是否在 profile 的 cordis.patch.yml 中被禁用（disabled: true），插件开关的唯一状态 */
-  patchDisabled: boolean
+  /** 插件开关状态：profile patch 的 disabled 覆盖，或 bundle 包被官方包级开关移出 bundles */
+  disabled: boolean
   /** 预设清单中的「推荐」标记 */
   recommended: boolean
   /** 预设清单中的「修复」标记 */

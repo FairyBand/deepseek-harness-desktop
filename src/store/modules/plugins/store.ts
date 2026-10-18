@@ -281,9 +281,9 @@ export const plugins = defineStore({
       const installed = this.installedSource.find(item => item.id === process.name || item.name === process.name)
       if (!installed)
         return process.type === 'uninstall' ? 'already-absent' : 'not-installed'
-      if (process.type === 'disable' && installed.patchDisabled)
+      if (process.type === 'disable' && installed.disabled)
         return 'already-absent'
-      if (process.type === 'enable' && !installed.patchDisabled)
+      if (process.type === 'enable' && !installed.disabled)
         return 'already-absent'
       return null
     },

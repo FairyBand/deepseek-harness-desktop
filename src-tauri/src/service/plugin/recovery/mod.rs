@@ -52,7 +52,7 @@ pub(crate) fn is_core_package(name: &str) -> bool {
 }
 
 /// 是否为合法的 npm 包名（可带 scope）。用于过滤日志里提取到的候选引用。
-fn is_package_name(s: &str) -> bool {
+pub(crate) fn is_package_name(s: &str) -> bool {
     let s = s.trim();
     if s.is_empty() || s.contains(':') || s.chars().any(|c| c.is_whitespace()) {
         return false;

@@ -17,7 +17,7 @@ export interface Plugin {
   description: string
   repoUrl: string
   bundled: boolean
-  patchDisabled: boolean
+  disabled: boolean
   recommended: boolean
   fix: boolean
   internal: boolean

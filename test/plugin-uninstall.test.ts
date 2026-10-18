@@ -76,8 +76,8 @@ describe('configPlugin preset chip', () => {
 
   it('allows internal toggles while withholding uninstall/snapshot', () => {
     const source = readFileSync(new URL('../src/ui/config/plugin.tsx', import.meta.url), 'utf8')
-    expect(source, '禁用入口包含内置插件').toContain('cond={!plugin.patchDisabled}')
-    expect(source, '启用入口包含内置插件的禁用态').toContain('cond={plugin.patchDisabled}')
+    expect(source, '禁用入口包含内置插件').toContain('cond={!plugin.disabled}')
+    expect(source, '启用入口包含内置插件的禁用态').toContain('cond={plugin.disabled}')
     expect(source, '快照入口由 !plugin.internal 守卫').toContain('<If cond={!plugin.internal}>')
   })
 
