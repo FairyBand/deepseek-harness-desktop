@@ -119,6 +119,7 @@ catalog:
   '@genapi/pipeline': ^4.1.4
   '@genapi/presets': ^4.1.4
   '@genapi/shared': ^4.1.4
+  '@modelcontextprotocol/client': 2.2.0
   '@tauri-apps/plugin-os': ^2.3.2
   '@tauri-apps/plugin-store': ^2.4.4
   dsh-h3: 0.2.1

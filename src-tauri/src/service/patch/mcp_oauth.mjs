@@ -159,14 +159,46 @@ export function desktopMcpOAuth(sdk, credentials) {
     let timer
     let transport
     let listener
-    const finish = (error) => {
+    let stage = 'MCP initialization'
+    let httpStatus
+    const request = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      const metadata = interaction.discovery?.authorizationServerMetadata
+      const authorizationServer = interaction.discovery?.authorizationServerUrl
+      if (url.href === metadata?.registration_endpoint || (!metadata && authorizationServer && url.href === new URL('/register', authorizationServer).href))
+        stage = 'MCP OAuth client registration'
+      else if (url.href === metadata?.token_endpoint || (!metadata && authorizationServer && url.href === new URL('/token', authorizationServer).href))
+        stage = 'MCP OAuth token exchange'
+      else
+        stage = url.href === endpoint(row).href ? 'MCP initialization' : 'MCP OAuth server discovery'
+      httpStatus = undefined
+      const response = await fetchWithin(controller.signal)(input, init)
+      httpStatus = response.status
+      return response
+    }
+    const failure = (error) => {
+      if ((sdk.IssuerMismatchError && error instanceof sdk.IssuerMismatchError) || (sdk.AuthorizationServerMismatchError && error instanceof sdk.AuthorizationServerMismatchError))
+        return 'MCP OAuth authorization server validation failed'
+      if (sdk.InsecureTokenEndpointError && error instanceof sdk.InsecureTokenEndpointError)
+        return 'MCP OAuth requires a secure token endpoint'
+      if (error instanceof Error && /^(?:MCP authorization timed out|MCP authorization required|OAuth authorization denied|Missing OAuth authorization code|MCP server did not request OAuth authorization|MCP initialization failed(?: \(HTTP [45]\d{2}\))?)$/.test(error.message))
+        return error.message
+      const status = Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus <= 599 ? ` (HTTP ${httpStatus})` : ''
+      if (sdk.RegistrationRejectedError && error instanceof sdk.RegistrationRejectedError)
+        return `MCP OAuth client registration failed${status}${httpStatus === 403 ? '. The server may require an approved MCP client.' : ''}`
+      const metadata = interaction.discovery?.authorizationServerMetadata
+      if (metadata && !metadata.registration_endpoint && !interaction.clientInformation)
+        return 'MCP OAuth client registration is not supported by the server'
+      return `${stage} failed${status}`
+    }
+    const finish = (message) => {
       clearTimeout(timer)
       controller.abort()
       listener.close()
       listener.closeAllConnections()
-      if (error) {
+      if (message) {
         attempt.status = 'error'
-        attempt.error = error instanceof Error && ['MCP authorization timed out', 'OAuth authorization denied', 'Missing OAuth authorization code', 'MCP initialization failed'].some(prefix => error.message.startsWith(prefix)) ? error.message : 'MCP authorization failed'
+        attempt.error = message
       }
       interaction.verifier = undefined
       interaction.state = undefined
@@ -204,7 +236,7 @@ export function desktopMcpOAuth(sdk, credentials) {
       }
       catch (error) {
         res.writeHead(400).end('MCP authorization failed. Return to DSH for details.')
-        finish(error)
+        finish(failure(error))
       }
     })
     await new Promise((resolve, reject) => {
@@ -213,10 +245,10 @@ export function desktopMcpOAuth(sdk, credentials) {
     })
     interaction.redirectUrl = `http://127.0.0.1:${listener.address().port}/callback`
     attempts.set(attemptId, attempt)
-    timer = setTimeout(() => finish(new Error('MCP authorization timed out')), 300000)
+    timer = setTimeout(finish, 300000, 'MCP authorization timed out')
     timer.unref()
     try {
-      transport = new sdk.StreamableHTTPClientTransport(endpoint(row), { authProvider: provider(row, interaction, controller.signal), requestInit: { headers: row.headers }, fetch: fetchWithin(controller.signal) })
+      transport = new sdk.StreamableHTTPClientTransport(endpoint(row), { authProvider: provider(row, interaction, controller.signal), requestInit: { headers: row.headers }, fetch: request })
       const client = new sdk.Client({ name: 'dsh-desktop-auth', version: '1' })
       try {
         await client.connect(transport, { signal: AbortSignal.timeout(15000), timeout: 15000 })
@@ -233,8 +265,9 @@ export function desktopMcpOAuth(sdk, credentials) {
       return { authorizationUrl: interaction.authorizationUrl, attemptId }
     }
     catch (error) {
-      finish(error)
-      throw new Error('MCP OAuth authorization could not start')
+      const message = failure(error)
+      finish(message)
+      throw Object.assign(new Error(message), { code: 'MCP_OAUTH_START_FAILED' })
     }
   }
   const api = { provider, check, start, lookup: id => attempts.get(id) ? { ...attempts.get(id) } : undefined }

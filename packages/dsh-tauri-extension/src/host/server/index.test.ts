@@ -263,6 +263,25 @@ describe('能力管理器路由声明', () => {
     expect(missing.status).toBe(400)
   })
 
+  it('授权启动的已知协议错误返回 422 且保留安全诊断', async () => {
+    const { base } = await start()
+    vi.spyOn(mcp, 'peek').mockReturnValue([{ id: 'figma', serverName: 'figma', transport: 'streamable-http', disabled: false, url: 'https://mcp.example.test/mcp' }])
+    const message = 'MCP OAuth client registration failed (HTTP 403). The server may require an approved MCP client.'
+    vi.spyOn(mcpAuth, 'start').mockRejectedValue(Object.assign(new Error(message), { code: 'MCP_OAUTH_START_FAILED' }))
+    const response = await fetch(`${base}${P}/mcp/authorize`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'figma' }) })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: message })
+  })
+
+  it('未知授权错误仍返回 500 且不泄露原始异常中的秘密', async () => {
+    const { base } = await start()
+    vi.spyOn(mcp, 'peek').mockReturnValue([{ id: 'figma', serverName: 'figma', transport: 'streamable-http', disabled: false, url: 'https://mcp.example.test/mcp' }])
+    vi.spyOn(mcpAuth, 'start').mockRejectedValue(new Error('client_secret=secret-marker code_verifier=secret-marker access_token=secret-marker refresh_token=secret-marker https://auth.example.test/?code=secret-marker'))
+    const response = await fetch(`${base}${P}/mcp/authorize`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'figma' }) })
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'MCP OAuth authorization could not start' })
+  })
+
   it('拒绝未知授权任务和不存在的 MCP，stdio 不进入 OAuth', async () => {
     const { base } = await start()
     const unknown = await fetch(`${base}${P}/mcp/authorize?attemptId=missing`)

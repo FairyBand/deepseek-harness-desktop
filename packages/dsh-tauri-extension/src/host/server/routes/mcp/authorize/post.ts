@@ -27,7 +27,8 @@ export default defineEventHandler<EventHandlerRequest, Promise<{ authorizationUr
     return await mcpAuth.start(row)
   }
   catch (error) {
-    event.res.status = 500
-    return { error: error instanceof Error ? error.message : String(error) }
+    const expected = error instanceof Error && 'code' in error && error.code === 'MCP_OAUTH_START_FAILED'
+    event.res.status = expected ? 422 : 500
+    return { error: expected ? error.message : 'MCP OAuth authorization could not start' }
   }
 })

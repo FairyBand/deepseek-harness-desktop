@@ -135,6 +135,7 @@
     "@genapi/core": "catalog:",
     "@genapi/presets": "catalog:",
     "@genapi/shared": "catalog:",
+    "@modelcontextprotocol/client": "catalog:",
     "@shikijs/langs": "catalog:testing",
     "@tailwindcss/postcss": "catalog:build",
     "@tailwindcss/vite": "catalog:build",
