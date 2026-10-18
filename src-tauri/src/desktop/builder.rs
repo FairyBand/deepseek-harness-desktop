@@ -56,13 +56,18 @@ const TRAFFIC_LIGHT_INSET_X: f64 = 18.0;
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_VISUAL_OFFSET: f64 = 2.0;
 
-/// WebView2 原生拖拽区域所需的参数。
+/// WebView2 原生拖拽区域与内嵌回环页面所需的参数。
 ///
 /// `data-tauri-drag-region` 的兼容脚本只处理鼠标事件；WebView2 的原生
 /// `app-region: drag` 才能让触摸输入进入窗口非客户区拖拽。ElasticOverscroll
 /// 会抢走触摸手势，因此必须同时禁用。Wry 的默认安全功能保持启用。
+///
+/// `LocalNetworkAccessChecks` 会把壳层（`http://tauri.localhost`）到 `127.0.0.1`
+/// 的内嵌页面判成公网页面访问本地网络并直接拦截（ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS）：
+/// 预加载由原生处理器从磁盘直出不受影响，一旦回退到真实 HTTP 加载就永远打不开。
+/// 桌面壳与本地服务同机，这项检查不适用，只关闭它，不放开其他安全限制。
 #[cfg(windows)]
-const WINDOWS_DRAG_BROWSER_ARGS: &str = "--enable-features=msWebView2EnableDraggableRegions --disable-features=ElasticOverscroll,msWebOOUI,msPdfOOUI";
+const WINDOWS_SHELL_BROWSER_ARGS: &str = "--enable-features=msWebView2EnableDraggableRegions --disable-features=ElasticOverscroll,msWebOOUI,msPdfOOUI,LocalNetworkAccessChecks";
 
 /// 主窗口 label：壳层状态（几何恢复/落盘、托盘/单例唤起、macOS Reopen）都以它为准。
 pub const MAIN_WINDOW_LABEL: &str = "main";
@@ -881,7 +886,7 @@ fn with_shell_chrome<'a>(
     #[cfg(windows)]
     let builder = builder
         .data_directory(webview_data_directory(app))
-        .additional_browser_args(WINDOWS_DRAG_BROWSER_ARGS)
+        .additional_browser_args(WINDOWS_SHELL_BROWSER_ARGS)
         .icon(app.default_window_icon().unwrap().clone())?;
 
     #[cfg(target_os = "macos")]
@@ -1263,15 +1268,18 @@ pub fn build_extra_window(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::{load_exe_icons, WINDOWS_DRAG_BROWSER_ARGS};
+    use super::{load_exe_icons, WINDOWS_SHELL_BROWSER_ARGS};
     use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     #[test]
-    fn windows_drag_args_enable_touch_drag_and_disable_overscroll() {
-        let args = WINDOWS_DRAG_BROWSER_ARGS;
+    fn windows_shell_browser_args_keep_touch_drag_and_allow_loopback_frames() {
+        let args = WINDOWS_SHELL_BROWSER_ARGS;
         assert!(args.contains("--enable-features=msWebView2EnableDraggableRegions"));
         assert!(args.contains("--disable-features=ElasticOverscroll"));
         assert!(args.contains("msWebOOUI,msPdfOOUI"));
+        assert!(args.contains(",LocalNetworkAccessChecks"));
+        assert!(!args.contains("--disable-web-security"));
+        assert!(!args.contains("--no-sandbox"));
         let smart_screen = ["ms", "SmartScreen", "Protection"].concat();
         assert!(!args.contains(smart_screen.as_str()));
     }
