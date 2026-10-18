@@ -53,7 +53,7 @@ import { RemoteSwitcher } from './remote-switcher'
  *   与切换器共用服务可用门槛（见 `remote-share.tsx`）；齿轮入口经 `onOpenRemoteAccess` 定位到本机访问页。
  * - 文件：新建窗口（Tauri 再开一个 webview）/ 新聊天、打开文件夹（经协议调用 dsh 官方
  *   「新建会话」「添加工作区」，接收方是 dsh-tauri 的 `client/register/navigation.ts`）/
- *   关闭（主窗口按设置驻留托盘，附加窗口直接销毁）/ 退出（完整退出）。两条依赖 iframe
+ *   关闭（主窗口隐藏到托盘，附加窗口直接销毁）/ 退出（完整退出）。两条依赖 iframe
  *   的项在回调缺席时禁用。
  * - 运行：应用 / 档案 / 插件 / 核心，直接打开配置对话框并定位到对应面板
  *   （对话框与角标见 `ui/dialog/config.tsx`）；「应用」项右侧另挂一个快捷重启图标按钮，
@@ -279,8 +279,6 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
   const tauriEnabled = plugins.some(plugin => plugin.id === TAURI_PLUGIN_ID)
   const isNightly = appIdentifier === 'dsh-tauri-nightly'
   const showUpdateAvailable = appIdentifier != null && !isNightly && updateInfo != null
-  // 关闭语义由 Rust 按 label 决定（见 src-tauri/src/desktop/builder.rs 的 CloseRequested）：
-  // 主窗口按设置驻留托盘或退出，附加窗口直接销毁。这里只在文案上区分两者。
   const isMainWindow = getCurrentWindow().label === 'main'
   function handleWindowAction(action: 'minimize' | 'maximize' | 'close') {
     const appWindow = getCurrentWindow()
@@ -292,9 +290,10 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
         void appWindow.toggleMaximize()
         break
       case 'close':
-        // 走原生 close 而不是 hide：附加窗口关闭就该销毁，隐藏会留下没有恢复入口、
-        // 却仍在监听通知的窗口（点击通知时它们会一起冒出来）。
-        void appWindow.close()
+        if (isMainWindow)
+          void appWindow.hide()
+        else
+          void appWindow.close()
         break
     }
   }
@@ -339,7 +338,6 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
         onOpenFolder?.()
         break
       case 'close':
-        // 关闭当前窗口：主窗口驻留托盘，附加窗口直接销毁（由 Rust 按 label 决定）。
         handleWindowAction('close')
         break
       case 'quit':

@@ -63,14 +63,37 @@ afterAll(() => {
 })
 
 describe('navbar window close', () => {
-  it('closes an extra window through the native close path instead of hiding it', async () => {
-    mockWindows('window-2')
+  it.each(['window-2', 'remote-2'])('closes the %s attached window instead of hiding it', async (label) => {
+    mockWindows(label)
     render(<Navbar onRemoteChange={vi.fn()} />)
 
     fireEvent.click(screen.getByLabelText('nav.close'))
 
-    await waitFor(() => expect(native).toHaveBeenCalledWith('plugin:window|close', expect.objectContaining({ label: 'window-2' })))
+    await waitFor(() => expect(native).toHaveBeenCalledWith('plugin:window|close', expect.objectContaining({ label })))
     expect(native).not.toHaveBeenCalledWith('plugin:window|hide', expect.anything())
+  })
+
+  it('hides the main window when its background button is clicked without requesting close', async () => {
+    mockWindows('main')
+    render(<Navbar onRemoteChange={vi.fn()} />)
+
+    fireEvent.click(screen.getByLabelText('nav.background'))
+
+    await waitFor(() => expect(native).toHaveBeenCalledWith('plugin:window|hide', expect.objectContaining({ label: 'main' })))
+    expect(native).not.toHaveBeenCalledWith('plugin:window|close', expect.anything())
+  })
+
+  it.each(['main', 'window-2', 'remote-2'])('routes the File close action for %s to the matching native operation', async (label) => {
+    mockWindows(label)
+    render(<Navbar onRemoteChange={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('dsh-navbar-menu-file'))
+    fireEvent.click(await screen.findByTestId('dsh-navbar-item-close'))
+
+    const command = label === 'main' ? 'plugin:window|hide' : 'plugin:window|close'
+    const otherCommand = label === 'main' ? 'plugin:window|close' : 'plugin:window|hide'
+    await waitFor(() => expect(native).toHaveBeenCalledWith(command, expect.objectContaining({ label })))
+    expect(native).not.toHaveBeenCalledWith(otherCommand, expect.anything())
   })
 
   it('keeps the main window close labeled as backgrounding to the tray', () => {
