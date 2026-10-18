@@ -1655,6 +1655,8 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::desktop::window::toggle_devtools,
         crate::bridge::log_frontend,
         crate::bridge::get_pet_status,
+        crate::bridge::pet_show_main_window,
+        crate::bridge::pet_show_context_menu,
         crate::bridge::get_pet_overlay_supported,
         crate::bridge::get_force_xwayland,
         crate::bridge::set_force_xwayland,
@@ -1739,6 +1741,12 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "pet-show-main-window" => show_main_window(app),
+            "pet-close" => {
+                if let Err(error) = crate::bridge::set_pet_enabled(app.clone(), false) {
+                    log::error!("PET_CLOSE_FAILED: {error}");
+                }
+            }
             "desktop-toggle-sidebar"
             | "desktop-toggle-right-panel"
             | "desktop-open-terminal"

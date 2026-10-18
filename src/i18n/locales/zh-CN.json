@@ -96,6 +96,8 @@
   "menu.new_window": "新建窗口",
   "menu.new_chat": "新聊天",
   "menu.open_folder": "打开文件夹",
+  "pet.show_main_window": "显示主界面",
+  "pet.close": "关闭宠物",
   "menu.close": "关闭",
   "menu.quit": "退出",
   "menu.documentation": "文档",

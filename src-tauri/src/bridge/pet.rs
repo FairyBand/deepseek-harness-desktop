@@ -211,6 +211,50 @@ fn emit_pet_status(app: &AppHandle, status: &PetStatus) {
     );
 }
 
+#[tauri::command]
+pub fn pet_show_main_window(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != pet_window::PET_WINDOW_LABEL {
+        return Err(
+            "PET_WINDOW_LABEL_MISMATCH: this command is restricted to the pet window".into(),
+        );
+    }
+    crate::utils::show_main_window(window.app_handle());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn pet_show_context_menu(window: WebviewWindow) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem};
+
+    if window.label() != pet_window::PET_WINDOW_LABEL {
+        return Err(
+            "PET_WINDOW_LABEL_MISMATCH: this command is restricted to the pet window".into(),
+        );
+    }
+    let app = window.app_handle();
+    let show = MenuItem::with_id(
+        app,
+        "pet-show-main-window",
+        config::i18n::t("pet.show_main_window"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| format!("PET_MENU_CREATE_FAILED: {error}"))?;
+    let close = MenuItem::with_id(
+        app,
+        "pet-close",
+        config::i18n::t("pet.close"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| format!("PET_MENU_CREATE_FAILED: {error}"))?;
+    let menu = Menu::with_items(app, &[&show, &close])
+        .map_err(|error| format!("PET_MENU_CREATE_FAILED: {error}"))?;
+    window
+        .popup_menu(&menu)
+        .map_err(|error| format!("PET_MENU_POPUP_FAILED: {error}"))
+}
+
 /// 查询桌宠当前完整状态。
 #[tauri::command]
 pub fn get_pet_status(app: AppHandle) -> PetStatus {

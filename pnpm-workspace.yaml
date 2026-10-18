@@ -12,7 +12,7 @@ inject-workspace-packages: true
 minimumReleaseAgeExclude:
   - '@reause/core@0.1.7'
   - '@reause/shared@0.1.7'
-  - dsh-pet-component@0.2.4
+  - dsh-pet-component@0.2.5
   - '@deepseek-ai/cordis-plugin-group@1.0.5'
   - '@deepseek-ai/cordis@4.0.5'
   - '@deepseek-ai/cordis-plugin-include@1.0.10'
@@ -226,7 +226,7 @@ catalogs:
     '@overlastic/react': ^0.9.0
     '@reause/core': ^0.1.7
     '@tanstack/react-query': ^5.101.4
-    dsh-pet-component: ^0.2.4
+    dsh-pet-component: ^0.2.5
     i18next: ^26.3.6
     react: ^19.2.8
     react-dom: ^19.2.8

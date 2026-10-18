@@ -323,8 +323,8 @@ catalogs:
       specifier: ^5.101.4
       version: 5.101.4
     dsh-pet-component:
-      specifier: ^0.2.4
-      version: 0.2.4
+      specifier: ^0.2.5
+      version: 0.2.5
     i18next:
       specifier: ^26.3.6
       version: 26.3.6
@@ -533,7 +533,7 @@ importers:
         version: 2.4.4
       dsh-pet-component:
         specifier: catalog:runtime
-        version: 0.2.4(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8)
+        version: 0.2.5(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8)
       expo:
         specifier: catalog:native
         version: 57.0.26(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(@expo/metro-runtime@57.0.16)(expo-router@57.0.24)(react-dom@19.2.8(react@19.2.8))(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8))(react-native-worklets@0.10.1(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8))(react-native@0.86.3(@babel/core@7.29.7)(@react-native/metro-config@0.86.3(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.8))(react@19.2.8)(typescript@5.8.3)
@@ -5911,8 +5911,8 @@ packages:
       typescript:
         optional: true
 
-  dsh-pet-component@0.2.4:
-    resolution: {integrity: sha512-q8HIQX7sx47Rb53g67YXWgNOlFFDooXNvxAAkYW6Nhzyu1mGnTjZ14cGsuD5QKumxVnG5yE8yvR2SqWnk1DEKQ==}
+  dsh-pet-component@0.2.5:
+    resolution: {integrity: sha512-7uaVJfEC0o9tT2+ZeUiNHUwpa7He3q1TWdCwUu/snAus4z9WDUxKiLFracUugvlsCvJru785KKXmGKjgogAAXA==}
     peerDependencies:
       react: ^19.0.0
 
@@ -14576,7 +14576,7 @@ snapshots:
       - crossws
       - ocache
 
-  dsh-pet-component@0.2.4(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8):
+  dsh-pet-component@0.2.5(change-case@5.4.4)(qrcode@1.5.4)(react@19.2.8):
     dependencies:
       '@gravity-ui/icons': 2.21.0(react@19.2.8)
       '@reause/core': 0.1.7(react@19.2.8)

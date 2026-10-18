@@ -96,6 +96,8 @@
   "menu.new_window": "New Window",
   "menu.new_chat": "New Chat",
   "menu.open_folder": "Open Folder",
+  "pet.show_main_window": "Show Main Window",
+  "pet.close": "Close Pet",
   "menu.close": "Close",
   "menu.quit": "Quit",
   "menu.documentation": "Documentation",

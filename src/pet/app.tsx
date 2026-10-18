@@ -1,5 +1,7 @@
 import type { PetRef, PetRenderMotion } from 'dsh-pet-component'
+import type { MouseEvent } from 'react'
 import { useEventListener } from '@reause/core'
+import { invoke } from '@tauri-apps/api/core'
 import { Pet, useControllablePet } from 'dsh-pet-component'
 import { useRef } from 'react'
 import { If } from 'react-if-lite'
@@ -48,6 +50,15 @@ export function App() {
   useEventListener('contextmenu', event => event.preventDefault())
   useWakelockRelease()
 
+  function handleDoubleClick(): void {
+    void invoke('pet_show_main_window').catch(error => reportPetIssue('show main window', error))
+  }
+
+  function handleContextMenu(event: MouseEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    void invoke('pet_show_context_menu').catch(error => reportPetIssue('context menu', error))
+  }
+
   const motion: PetRenderMotion | undefined = draggable.dragging
     ? (draggable.direction === undefined ? undefined : `moving-${draggable.direction}`)
     : undefined
@@ -65,6 +76,8 @@ export function App() {
           size={width}
           dragging={draggable.dragging}
           onFling={onFling}
+          onDoubleClick={handleDoubleClick}
+          onContextMenu={handleContextMenu}
           cache={source.cache}
           hidden={!visible}
           hitboxRef={hitboxRef}

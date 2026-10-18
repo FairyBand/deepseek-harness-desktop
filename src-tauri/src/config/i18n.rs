@@ -49,6 +49,8 @@ pub fn t(key: &str) -> String {
         "menu.new_chat" => ("新聊天", "New Chat"),
         "menu.open_folder" => ("打开文件夹", "Open Folder"),
         "menu.open_panel" => ("打开面板", "Open Panel"),
+        "pet.show_main_window" => ("显示主界面", "Show Main Window"),
+        "pet.close" => ("关闭宠物", "Close Pet"),
         "menu.close" => ("关闭", "Close"),
         "menu.quit" => ("退出", "Quit"),
         "menu.documentation" => ("文档", "Documentation"),
