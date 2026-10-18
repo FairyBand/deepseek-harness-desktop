@@ -129,10 +129,15 @@ export default c([
   c('[class*="collapsed"] [class$="logoRow"]', {
     justifyContent: 'flex-start !important',
   }),
-  c('[data-slot="settings.section"] > div', {
-    maxWidth: 'none !important',
-    paddingBottom: '24px',
-  }),
+  c('[data-slot-sidebar="dsh-tauri-ui"]', [
+    c('[data-slot="settings.section"] > :is(div, section)', {
+      maxWidth: 'none !important',
+      paddingBottom: '24px',
+    }),
+    c('[data-slot="settings.section"] [data-slot="settings.plugins.tab"] > :is(div, section)', {
+      maxWidth: 'none !important',
+    }),
+  ]),
   c('[data-slot="conversation.chat.turnTail"]', [
     c('[class$="card"]', {
       borderRadius: '14px !important',

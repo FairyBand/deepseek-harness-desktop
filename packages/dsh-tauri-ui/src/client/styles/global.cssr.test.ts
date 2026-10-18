@@ -12,6 +12,68 @@ it('始终隐藏 better-sidebar 的 dock fallback 入口', () => {
   }])
 })
 
+describe('desktop settings page width', () => {
+  function declarationsFor(markup: string, target: string, property: string): string[] {
+    const fixture = document.createElement('div')
+    fixture.innerHTML = markup
+    const element = fixture.querySelector(target)!
+    const declarations: string[] = []
+    postcss.parse(globalStyle.render()).walkRules((rule) => {
+      if (rule.selector.includes('settings') && element.matches(rule.selector)) {
+        rule.walkDecls(property, (declaration) => {
+          declarations.push(`${declaration.value}${declaration.important ? ' !important' : ''}`)
+        })
+      }
+    })
+    return declarations
+  }
+
+  const officialPages = `
+    <div data-slot="settings.section" style="display:contents">
+      <div id="plugins" class="pbvGtq_section">
+        <div class="pbvGtq_panel">
+          <div data-slot="settings.plugins.tab" style="display:contents">
+            <div id="inventory" class="qSYn7G_section"><div id="card" class="qSYn7G_card"></div></div>
+          </div>
+        </div>
+      </div>
+      <section id="presets" class="rtSEdW_section"><section id="group" class="rtSEdW_group"></section></section>
+      <div id="general"><div id="control"></div></div>
+    </div>`
+  const desktop = `<div data-slot-sidebar="dsh-tauri-ui">${officialPages}</div>`
+
+  it.each(['plugins', 'inventory', 'presets', 'general'])('desktop settings root %s delegates width to the sidebar container', (id) => {
+    expect(declarationsFor(desktop, `#${id}`, 'max-width')).toEqual(['none !important'])
+  })
+
+  it.each(['plugins', 'presets', 'general'])('desktop settings root %s retains its bottom clearance', (id) => {
+    expect(declarationsFor(desktop, `#${id}`, 'padding-bottom')).toEqual(['24px'])
+  })
+
+  it.each(['card', 'group', 'control'])('nested settings content %s keeps its own width constraints', (id) => {
+    expect(declarationsFor(desktop, `#${id}`, 'max-width')).toEqual([])
+  })
+
+  it('nested inventory does not receive a second page bottom clearance', () => {
+    expect(declarationsFor(desktop, '#inventory', 'padding-bottom')).toEqual([])
+  })
+
+  it.each(['plugins', 'inventory', 'presets', 'general'])('official settings root %s outside the desktop sidebar is unchanged', (id) => {
+    expect(declarationsFor(officialPages, `#${id}`, 'max-width')).toEqual([])
+    expect(declarationsFor(officialPages, `#${id}`, 'padding-bottom')).toEqual([])
+  })
+
+  it('a plugin tab outside the settings section keeps its width limit', () => {
+    const markup = '<div data-slot-sidebar="dsh-tauri-ui"><div data-slot="settings.plugins.tab"><div id="tab"></div></div><section id="ordinary"></section></div>'
+    expect(declarationsFor(markup, '#tab', 'max-width')).toEqual([])
+    expect(declarationsFor(markup, '#ordinary', 'max-width')).toEqual([])
+  })
+
+  it('the plugin manager page outside settings keeps its own child width limits', () => {
+    expect(declarationsFor('<div data-slot="main"><div class="X_2TxG_page"><div id="manager"></div></div></div>', '#manager', 'max-width')).toEqual([])
+  })
+})
+
 describe('conversation input dock stack', () => {
   const rules: Record<string, Record<string, string>> = {}
   postcss.parse(globalStyle.render()).walkRules((rule) => {
