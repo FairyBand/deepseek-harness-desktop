@@ -14,7 +14,8 @@
 //! - 安装包下载到 AppData/updates 目录；已存在则视为「已下载」，不再重复拉取。
 //! - 打开安装器（exe/msi/dmg 等）交给系统默认处理器（ShellExecute/LaunchServices）。
 //! - 下载完成的安装包登记为「待安装」（见 [`pending`]）：用户没立刻安装时，
-//!   关闭应用的那一刻自动打开安装器，避免用户错过升级。
+//!   关闭应用的那一刻自动打开安装器，避免用户错过升级。该自动链路受设置页
+//!   「自动更新」开关约束（issue #1132），关闭后只保留用户显式发起的检查/安装。
 //!
 //! 模块划分（参考 `service/cli/`、`service/download/`）：
 //! - [`version`]：版本比较与当前平台安装包资产选择
@@ -34,6 +35,22 @@ pub use about::{about, DesktopAboutInfo};
 #[allow(unused_imports)]
 pub use install::{check, download, open_installer, DesktopDownloadProgress, DesktopUpdateInfo};
 pub use pending::launch_pending_installer;
+
+/// 自动更新（静默下载后退出时自动安装）是否生效。
+///
+/// 唯一真值是设置页「自动更新」开关：关闭后只剩用户显式发起的链路（「检查更新」
+/// 与对话框里的「立即更新」），退出时不会拿已下载的安装包替换本应用（issue #1132）。
+pub(super) fn auto_update_enabled(app_handle: &tauri::AppHandle) -> bool {
+    crate::config::get_store_dat_setting(app_handle).auto_update
+}
+
+/// 丢弃「待安装」标记（用户关闭自动更新时调用）。
+///
+/// 只在退出时按当前设置判断还不够：用户关掉开关、退出前又打开，旧的已下载安装包
+/// 会立刻重新变成「退出即安装」——那正是开关要避免的未经确认替换。
+pub fn clear_pending_installer(app_handle: &tauri::AppHandle) {
+    pending::set(app_handle, None);
+}
 
 /// 仓库主页（同时用于构造 atom / expanded_assets / 下载地址）
 const REPO_URL: &str = "https://github.com/hairyf/deepseek-harness-desktop";

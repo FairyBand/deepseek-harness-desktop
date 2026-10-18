@@ -23,6 +23,7 @@ vi.mock('react-i18next', () => ({
 }))
 vi.mock('@/hooks/use-listen', () => ({ useListen: () => {} }))
 vi.mock('@/ui/config/components/close-action', () => ({ ConfigCloseAction: () => null }))
+vi.mock('@/ui/config/components/auto-update', () => ({ ConfigAutoUpdate: () => null }))
 vi.mock('@/ui/config/components/launch-on-login', () => ({ ConfigLaunchOnLogin: () => null }))
 vi.mock('@/ui/config/hooks/use-core-profile-switch', () => ({
   useCoreProfileSwitch: () => ({ holder: null, guardCoreUpgrade: vi.fn() }),

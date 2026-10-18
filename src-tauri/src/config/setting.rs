@@ -16,6 +16,12 @@ pub struct Setting {
     #[serde(default)]
     pub harness_max_heap_mb: Option<u32>,
     pub auto_start: bool,
+    /// 是否自动更新桌面应用：开启时启动后轮询检查、发现新版本即静默下载，并在
+    /// 退出时自动打开安装器。关闭后只剩「帮助 → 检查更新」这类用户显式发起的
+    /// 更新链路，不再静默下载或强制安装（第三方打包与自行管理版本的用户需要，
+    /// issue #1132）。
+    #[serde(default = "default_auto_update")]
+    pub auto_update: bool,
     pub language: String,
     #[serde(default)]
     pub dsh_pkg_commit: Option<String>,
@@ -122,6 +128,12 @@ fn default_cli_link_enabled() -> bool {
     true
 }
 
+/// 自动更新默认开启：与沿袭下来的「静默下载 + 退出时自动安装」行为一致，
+/// 老 store 缺字段时不会被静默关掉。
+fn default_auto_update() -> bool {
+    true
+}
+
 /// 界面默认缩放为 100%。
 pub fn default_zoom_factor() -> f64 {
     1.0
@@ -200,6 +212,7 @@ impl Default for Setting {
             port: default_port(),
             harness_max_heap_mb: None,
             auto_start: true,
+            auto_update: default_auto_update(),
             language: "zh-CN".to_string(),
             dsh_pkg_commit: None,
             dsh_pkg_tag: None,
@@ -380,6 +393,7 @@ fn preserve_persisted_fields(mut replacement: Setting, current: &Setting) -> Set
     replacement.zoom_factor = normalize_zoom_factor(current.zoom_factor);
     replacement.harness_max_heap_mb = normalize_harness_max_heap_mb(current.harness_max_heap_mb);
     replacement.close_action = normalize_close_action(&current.close_action);
+    replacement.auto_update = current.auto_update;
     replacement.pet_enabled = current.pet_enabled;
     replacement.active_pet.clone_from(&current.active_pet);
     replacement.pet_size = current.pet_size;
@@ -762,6 +776,33 @@ mod tests {
     }
 
     #[test]
+    fn auto_update_defaults_on_and_survives_full_setting_writes() {
+        let legacy: Setting = serde_json::from_value(serde_json::json!({
+            "installed": true,
+            "port": 3080,
+            "auto_start": true,
+            "language": "zh-CN"
+        }))
+        .expect("legacy setting should deserialize");
+        assert!(
+            legacy.auto_update,
+            "旧配置缺失 auto_update 时应回落默认开启，不能静默关掉老用户的自更新"
+        );
+
+        let merged = preserve_persisted_fields(
+            Setting::default(),
+            &Setting {
+                auto_update: false,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !merged.auto_update,
+            "整对象写入不得把用户显式关闭的自动更新翻回开启"
+        );
+    }
+
+    #[test]
     fn legacy_full_setting_write_preserves_latest_fields() {
         let stale = Setting {
             installed: true,
@@ -773,6 +814,7 @@ mod tests {
             dsh_pkg_tag: Some("new-tag".to_string()),
             zoom_factor: 0.8,
             close_action: "quit".to_string(),
+            auto_update: false,
             pet_enabled: false,
             active_pet: Some("chat:stale".to_string()),
             pet_size: Some(80.0),
@@ -817,6 +859,7 @@ mod tests {
         assert_eq!(merged.zoom_factor, 1.6);
         assert_eq!(merged.appearance, current.appearance);
         assert_eq!(merged.close_action, "tray");
+        assert!(merged.auto_update, "整对象写入不得覆盖最新的自动更新开关");
         assert!(merged.pet_enabled);
         assert_eq!(merged.active_pet.as_deref(), Some("codex:latest"));
         assert_eq!(

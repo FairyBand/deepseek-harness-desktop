@@ -71,11 +71,15 @@ pub(super) fn set(app_handle: &AppHandle, pending: Option<(&Path, &str)>) {
 
 /// 应用退出时自动打开已下载的待安装包。
 ///
-/// 只在「已下载但用户没在应用内打开过」时触发（标记由 `install` 模块维护）。
+/// 只在「已下载但用户没在应用内打开过」且设置页「自动更新」开启时触发（标记由
+/// `install` 模块维护）。关闭自动更新时顺手清掉标记：用户不想被替换安装，残留的
+/// 旧安装包也不该在下次退出时突然生效。
 /// 同步、不触网：退出路径不能引入等待或网络请求，把安装包交给系统默认处理器
 /// 启动即可（Windows 会触发 UAC，macOS/Linux 交给各自的系统安装流程）。
 pub fn launch_pending_installer(app_handle: &AppHandle) {
-    if !super::version::supports_stable_updates(&app_handle.config().identifier) {
+    if !super::version::supports_stable_updates(&app_handle.config().identifier)
+        || !super::auto_update_enabled(app_handle)
+    {
         set(app_handle, None);
         return;
     }

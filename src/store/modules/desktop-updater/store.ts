@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event'
 import i18next from 'i18next'
 import { defineStore } from 'valtio-define'
 import { toast } from '@/utils/toast'
+import { setting } from '../setting'
 
 let checkTask: Promise<DesktopUpdateInfo | null> | null = null
 let downloadTask: Promise<void> | null = null
@@ -24,7 +25,7 @@ let downloadAndOpenTask: Promise<boolean> | null = null
  * - 检测到新版本即**静默下载**，不弹右下角 toast、不打断用户；进度只在
  *   「检查更新」/「更新可用」chip 打开的对话框里展示；
  * - 用户没在对话框里安装时，Rust 侧会在应用退出时自动打开已下载的安装器
- *   （见 service::update::pending）。
+ *   （见 service::update::pending），仅在设置页「自动更新」开启时生效。
  */
 export const desktopUpdater = defineStore({
   state: () => ({
@@ -57,8 +58,12 @@ export const desktopUpdater = defineStore({
           if (info) {
             this.updateInfo = info
             // 检测到更新即静默下载（不弹 toast、不打开安装器）；失败静默，
-            // 用户点击「立即更新」时会重试并给出可见的错误提示
-            void this.download()
+            // 用户点击「立即更新」时会重试并给出可见的错误提示。
+            // 「自动更新」关闭后不再静默下载：手动检查只负责展示对话框，下载留给
+            // 「立即更新」这类显式动作（issue #1132）；这里在异步检查返回后重读开关，
+            // 因此检查途中被关掉也不会继续下载。
+            if (setting.auto_update)
+              void this.download()
           }
           else {
             this.updateInfo = null

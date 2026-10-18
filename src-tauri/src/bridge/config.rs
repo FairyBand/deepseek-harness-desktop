@@ -5,6 +5,7 @@
 
 use crate::config;
 use crate::service::cli;
+use crate::service::update;
 use tauri::AppHandle;
 
 /// 当前桌面端配置
@@ -65,6 +66,7 @@ pub async fn update_app_config(
     zoom_factor: Option<f64>,
     harness_max_heap_mb: Option<u32>,
     auto_start: Option<bool>,
+    auto_update: Option<bool>,
     cli_link_enabled: Option<bool>,
     close_action: Option<String>,
     backup_retention_count: Option<u32>,
@@ -110,6 +112,9 @@ pub async fn update_app_config(
         if let Some(auto_start) = auto_start {
             setting.auto_start = auto_start;
         }
+        if let Some(auto_update) = auto_update {
+            setting.auto_update = auto_update;
+        }
         if let Some(enabled) = cli_link_enabled {
             setting.cli_link_enabled = enabled;
         }
@@ -123,6 +128,11 @@ pub async fn update_app_config(
             setting.backup_include_credentials = include;
         }
     });
+    // 关闭自动更新时立刻丢弃已下载的待安装包：否则用户退出前又打开开关，旧的
+    // 安装包会在退出时被直接拉起安装（见 service::update::clear_pending_installer）。
+    if auto_update == Some(false) {
+        update::clear_pending_installer(&app_handle);
+    }
     let profile = crate::service::workflow::instances::window_profile(&app_handle, window.label());
     let mut setting = setting;
     setting.active_profile = profile.clone();

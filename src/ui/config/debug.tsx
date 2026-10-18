@@ -13,6 +13,7 @@ import { queryKeys } from '@/config/query-keys'
 import { useListen } from '@/hooks/use-listen'
 import { store } from '@/store'
 import { HARNESS_HEAP_MAX_MB, HARNESS_HEAP_MIN_MB } from '@/store/modules/setting'
+import { ConfigAutoUpdate } from '@/ui/config/components/auto-update'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
 import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
@@ -348,6 +349,7 @@ export function ConfigDebug() {
       </div>
       <div className="border-t border-line/30" />
       <div className="space-y-1.5">
+        <ConfigAutoUpdate />
         <ConfigLaunchOnLogin />
         <ConfigCloseAction />
 

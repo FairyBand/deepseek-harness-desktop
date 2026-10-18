@@ -39,6 +39,7 @@ export function App() {
 
   const { t } = useTranslation()
   const { status } = useStore(store.harness)
+  const { hydrated: settingReady, auto_update: autoUpdate } = useStore(store.setting)
   const { updateInfo, updating } = useStore(store.harnessUpdater)
   const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
@@ -80,12 +81,16 @@ export function App() {
   // 首次挂载自动启动 harness（store 内部对 StrictMode 重复挂载去重）
   useMount(() => store.harness.startup())
 
-  // 桌面端更新轮询：启动即检查一次，之后低频轮询；失败一律静默（不打扰用户）。
+  // 桌面端更新轮询：设置页「自动更新」开启后才检查——关闭后不再静默下载安装包，
+  // 也不会在退出时被自动安装（issue #1132）。水合前不检查：默认值不代表用户选择。
   // 发现新版本由 store 静默下载安装包，更新入口收敛到导航栏 chip 与「帮助 > 检查更新」。
+  const autoCheckUpdate = settingReady && autoUpdate
   function checkDesktopUpdate() {
+    if (!store.setting.hydrated || !store.setting.auto_update)
+      return
     void store.desktopUpdater.check().catch(() => {})
   }
-  useMount(checkDesktopUpdate)
+  useWatch([autoCheckUpdate], checkDesktopUpdate, { immediate: true })
   useIntervalFn(checkDesktopUpdate, DESKTOP_UPDATE_POLL_INTERVAL)
 
   // 下载完成提示：dsh iframe 内的下载在 WebView2 中是静默保存的（用户零感知），

@@ -110,6 +110,30 @@ describe('desktop updater operation coordination', () => {
     })
   })
 
+  it('stays silent while automatic updates are off but still honors an explicit install', async () => {
+    const { setting } = await import('../setting')
+    setting.$patch({ auto_update: false })
+    const found = { ...UPDATE, downloaded: false }
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'check_desktop_update')
+        return Promise.resolve(found)
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    await expect(desktopUpdater.check()).resolves.toEqual(found)
+    expect(mocks.invoke).not.toHaveBeenCalledWith('download_desktop_update')
+
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'download_desktop_update')
+        return Promise.resolve({ ...found, downloaded: true })
+      if (command === 'open_desktop_installer')
+        return Promise.resolve()
+      throw new Error(`Unexpected command: ${command}`)
+    })
+    await expect(desktopUpdater.downloadAndOpen()).resolves.toBe(true)
+    expect(mocks.invoke).toHaveBeenCalledWith('download_desktop_update')
+  })
+
   it('downloads and opens an installer only once for simultaneous actions', async () => {
     const download = deferred<DesktopUpdateInfo>()
     const open = deferred<void>()

@@ -7,6 +7,7 @@ export interface AppSettingUpdate {
   zoomFactor?: number
   harnessMaxHeapMb?: number
   autoStart?: boolean
+  autoUpdate?: boolean
   cliLinkEnabled?: boolean
   closeAction?: string
   backupRetentionCount?: number
