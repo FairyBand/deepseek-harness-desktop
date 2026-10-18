@@ -1834,13 +1834,13 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
             }
             _ => {}
         })
-        // 关闭行为由设置项 `setting.close_action` 控制（D-08 / D-09）：
+        // 主窗口的关闭行为由设置项 `setting.close_action` 控制（D-08 / D-09）：
         // - quit：关窗即完整退出进程，不驻留托盘、不切 Accessory；
         // - tray（默认）：阻止关闭，应用级 hide（Cmd+H 语义）并切 Accessory 隐藏 Dock。
         // 退出分支**故意不加** `#[cfg(target_os = "macos")]` 门控 —— 「关闭窗口＝
         // 退出应用」是用户可选项，语义上应当三平台一致，不是 macOS 专属；而
         // `activation::on_window_hidden` 仅在 macOS 上有实现，故它保留 macOS 门控。
-        // 点击关闭按钮时按设置决定：隐藏到托盘驻留，还是完整退出程序
+        // 附加窗口不驻留托盘，关闭即销毁（见下面的 CloseRequested 分支）。
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == crate::desktop::pet::PET_WINDOW_LABEL {
@@ -1854,15 +1854,10 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
                     }
                     return;
                 }
-                // 主窗口以外的附加窗口（「文件 → 新建窗口」）不驻留托盘：直接关闭
-                // 销毁。隐藏它们既没有恢复入口，也不符合「关掉这个窗口」的直觉。
-                if (window.label() != MAIN_WINDOW_LABEL && !window.label().starts_with("window-"))
-                    || window.app_handle().webview_windows().values().any(|other| {
-                        other.label() != window.label()
-                            && (other.label() == MAIN_WINDOW_LABEL
-                                || other.label().starts_with("window-"))
-                    })
-                {
+                // 主窗口以外的附加窗口（「文件 → 新建窗口」、SSH 远端弹窗）不驻留托盘：
+                // 关闭即销毁。隐藏它们既没有恢复入口，也会留下仍在监听通知的窗口——
+                // 通知点击时它们会跟着一起 show 出来，看起来像被重新打开。
+                if window.label() != MAIN_WINDOW_LABEL {
                     return;
                 }
                 // get_store_dat_setting 内部已归一化，取值只可能是 tray 或 quit

@@ -72,7 +72,7 @@ pub fn show_window<R: Runtime>(window: &WebviewWindow<R>) {
 }
 
 /// 显示主窗口：托盘「打开面板」、托盘左键点击、macOS Dock 图标点击共用。
-/// 关闭按钮只隐藏窗口（见 builder 的 on_window_event），所以这里取到即可 show；
+/// 主窗口关闭只隐藏到托盘（见 builder 的 on_window_event），所以这里取到即可 show；
 /// 若窗口确实不存在（非预期路径），仅记录日志，不重建。
 pub fn shell_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
     app.get_webview_window("main").or_else(|| {

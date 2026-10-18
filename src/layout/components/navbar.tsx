@@ -38,7 +38,7 @@ import { RemoteSwitcher } from './remote-switcher'
 /**
  * 壳层窗口顶部导航栏（44px，常驻）：
  *
- *   [侧边栏(展开/收起)] [文件][运行][帮助][更新可用] [ 空白拖拽区 ] [远程][本地/远端] [最小化][最大化][后台化(X)]
+ *   [侧边栏(展开/收起)] [文件][运行][帮助][更新可用] [ 空白拖拽区 ] [远程][本地/远端] [最小化][最大化][关闭(X)]
  *
  * - 侧边栏：经 postMessage 操控 iframe 内的 dsh 应用
  *   （`dsh://sidebar:toggle`，由 dsh-tauri 插件的 `client/register/sidebar.ts`
@@ -53,7 +53,8 @@ import { RemoteSwitcher } from './remote-switcher'
  *   与切换器共用服务可用门槛（见 `remote-share.tsx`）；齿轮入口经 `onOpenRemoteAccess` 定位到本机访问页。
  * - 文件：新建窗口（Tauri 再开一个 webview）/ 新聊天、打开文件夹（经协议调用 dsh 官方
  *   「新建会话」「添加工作区」，接收方是 dsh-tauri 的 `client/register/navigation.ts`）/
- *   关闭（隐藏到托盘）/ 退出（完整退出）。两条依赖 iframe 的项在回调缺席时禁用。
+ *   关闭（主窗口按设置驻留托盘，附加窗口直接销毁）/ 退出（完整退出）。两条依赖 iframe
+ *   的项在回调缺席时禁用。
  * - 运行：应用 / 档案 / 插件 / 核心，直接打开配置对话框并定位到对应面板
  *   （对话框与角标见 `ui/dialog/config.tsx`）；「应用」项右侧另挂一个快捷重启图标按钮，
  *   就地重启服务而不必先进面板。
@@ -62,7 +63,7 @@ import { RemoteSwitcher } from './remote-switcher'
  *   点击打开更新对话框；macOS 的「帮助」在原生菜单栏，chip 落到右侧控件区。
  * - 空白拖拽区：Tauri 原生 `data-tauri-drag-region`（顶层文档直接生效），
  *   Windows/Linux 上双击切换最大化，macOS 上交由系统标题栏偏好。
- * - macOS：使用原生交通灯，红键后台化、黄键最小化、绿键进入原生全屏；
+ * - macOS：使用原生交通灯，红键关闭（主窗口驻留托盘）、黄键最小化、绿键进入原生全屏；
  *   普通窗口下导航栏左侧留出交通灯区域，原生全屏时整条导航栏收起。
  *   「文件」「帮助」在 macOS 上由原生菜单栏承载（见 `desktop/builder.rs` 的
  *   `install_macos_menu`），本组按钮不渲染。
@@ -72,7 +73,8 @@ import { RemoteSwitcher } from './remote-switcher'
  *   class 就必须同步那个常量，否则 CI 失败（issue #524）。
  * - Windows/Linux：右侧窗口按钮直接调用 Tauri API；
  *   最大化的字形随窗口状态在「最大化 / 还原」间切换（`useMaximized` 订阅 `onResized`，
- *   因此按钮、拖拽区双击、Win+↑ 等任何原生路径都同步），后台化 = 隐藏到托盘（服务保持运行）。
+ *   因此按钮、拖拽区双击、Win+↑ 等任何原生路径都同步），关闭 = 主窗口隐藏到托盘 /
+ *   附加窗口销毁（服务保持运行）。
  *
  * 未传入 onToggleSidebar（安装/错误/预装引导页，无 iframe 可操控）时
  * 只渲染窗口控制与不依赖 iframe 的菜单项。
@@ -277,7 +279,10 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
   const tauriEnabled = plugins.some(plugin => plugin.id === TAURI_PLUGIN_ID)
   const isNightly = appIdentifier === 'dsh-tauri-nightly'
   const showUpdateAvailable = appIdentifier != null && !isNightly && updateInfo != null
-  function handleWindowAction(action: 'minimize' | 'maximize' | 'background') {
+  // 关闭语义由 Rust 按 label 决定（见 src-tauri/src/desktop/builder.rs 的 CloseRequested）：
+  // 主窗口按设置驻留托盘或退出，附加窗口直接销毁。这里只在文案上区分两者。
+  const isMainWindow = getCurrentWindow().label === 'main'
+  function handleWindowAction(action: 'minimize' | 'maximize' | 'close') {
     const appWindow = getCurrentWindow()
     switch (action) {
       case 'minimize':
@@ -286,9 +291,10 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
       case 'maximize':
         void appWindow.toggleMaximize()
         break
-      case 'background':
-        // 后台化：隐藏窗口到托盘（与关闭按钮行为一致，服务保持运行）
-        void appWindow.hide()
+      case 'close':
+        // 走原生 close 而不是 hide：附加窗口关闭就该销毁，隐藏会留下没有恢复入口、
+        // 却仍在监听通知的窗口（点击通知时它们会一起冒出来）。
+        void appWindow.close()
         break
     }
   }
@@ -333,8 +339,8 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
         onOpenFolder?.()
         break
       case 'close':
-        // 关闭 = 隐藏窗口到托盘（与右上角关闭按钮同语义，服务保持运行）
-        handleWindowAction('background')
+        // 关闭当前窗口：主窗口驻留托盘，附加窗口直接销毁（由 Rust 按 label 决定）。
+        handleWindowAction('close')
         break
       case 'quit':
         void quitApp()
@@ -886,8 +892,8 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
           isIconOnly
           size="sm"
           variant="ghost"
-          aria-label={t('nav.background')}
-          onPress={() => { handleWindowAction('background') }}
+          aria-label={t(isMainWindow ? 'nav.background' : 'nav.close')}
+          onPress={() => { handleWindowAction('close') }}
         >
           <Xmark />
         </Button>
