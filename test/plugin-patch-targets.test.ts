@@ -31,8 +31,8 @@ function patchTargetIds(source: string): string[] {
 }
 
 describe('插件 patch 层的官方目标', () => {
-  it('桌面桥接 bundle 为 web 档案启用官方侧栏浏览器', () => {
-    expect(readPatchLayer('dsh-tauri')).toMatch(/^- id: ui-sidebar-browser\r?\n {2}disabled: false$/m)
+  it('桌面桥接 bundle 在原生浏览器未适配前禁用官方侧栏浏览器', () => {
+    expect(readPatchLayer('dsh-tauri')).toMatch(/^- id: ui-sidebar-browser\r?\n {2}disabled: true$/m)
   })
 
   it('定时任务插件明确禁用完整官方调度栈且插入唯一实现', () => {
