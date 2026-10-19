@@ -186,7 +186,7 @@ export function buildWorkspaceMenu(
 
   composer.split()
   composer.add(locale.text('archiveWorkspaceSessions'), async () => {
-    const sessionIds = await loadWorkspaceSessions({ workspaces: composer.workspaces, workspace })
+    const sessionIds = await loadWorkspaceSessions({ workspaces: composer.workspaces, sessions: composer.sessions, workspace })
     if (!sessionIds.length) {
       composer.toast(locale.text('noWorkspaceSessions'))
       return

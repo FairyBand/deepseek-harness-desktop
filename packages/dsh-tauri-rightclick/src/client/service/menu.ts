@@ -2,6 +2,7 @@ import type {
   ActionOutcome,
   SessionId,
   SessionsRuntimeLike,
+  SessionSummaryLike,
   WorkspaceId,
   WorkspacesRuntimeLike,
   WorkspaceViewLike,
@@ -123,7 +124,15 @@ export async function forkSession(input: {
   }
 }
 
-/** Query：未分组中的正式会话 id（排除已归档、已归属工作区与空白会话）。 */
+/**
+ * 候选口径与 `dsh-tauri-archive` 对齐：官方侧栏会展示的正式会话。
+ * 子代理会话虽可能挂在 workspace 名下，但侧栏不渲染（见 issue #1151）。
+ */
+function isFormalSession(session: SessionSummaryLike | undefined): boolean {
+  return session !== undefined && session.blank !== true && session.origin !== 'subagent'
+}
+
+/** Query：未分组中的正式会话 id（排除已归档、已归属工作区、空白与子代理会话）。 */
 export async function loadUngroupedSessions(input: {
   workspaces: WorkspacesRuntimeLike
   sessions: SessionsRuntimeLike
@@ -132,16 +141,18 @@ export async function loadUngroupedSessions(input: {
   const assigned = snapshot.items.flatMap(workspace => workspace.sessionIds)
   const sessionSnapshot = input.sessions.list.getSnapshot()
   const excluded = new Set([...assigned, ...snapshot.archivedSessionIds])
-  return sessionSnapshot.ids.filter(id => !excluded.has(id) && sessionSnapshot.byId[id]?.blank !== true)
+  return sessionSnapshot.ids.filter(id => !excluded.has(id) && isFormalSession(sessionSnapshot.byId[id]))
 }
 
-/** Query：工作区中尚未归档的会话 id。 */
+/** Query：工作区中尚未归档的正式会话 id。 */
 export async function loadWorkspaceSessions(input: {
   workspaces: WorkspacesRuntimeLike
+  sessions: SessionsRuntimeLike
   workspace: WorkspaceViewLike
 }): Promise<SessionId[]> {
   const archived = new Set(input.workspaces.list.getSnapshot().archivedSessionIds)
-  return input.workspace.sessionIds.filter(id => !archived.has(id))
+  const byId = input.sessions.list.getSnapshot().byId
+  return input.workspace.sessionIds.filter(id => !archived.has(id) && isFormalSession(byId[id]))
 }
 
 /** Action：逐个归档会话。 */

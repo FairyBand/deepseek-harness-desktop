@@ -232,16 +232,38 @@ describe('loadUngroupedSessions', () => {
 
     await expect(loadUngroupedSessions({ workspaces, sessions })).resolves.toEqual(['e', 'f'])
   })
+
+  it('excludes subagent sessions from the batch archive candidates (issue #1151)', async () => {
+    const workspaces = {
+      list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }) },
+    } as unknown as WorkspacesRuntimeLike
+    const sessions = {
+      list: {
+        getSnapshot: () => ({
+          ids: ['formal', 'sub-1', 'sub-2'],
+          byId: { 'formal': {}, 'sub-1': { origin: 'subagent' }, 'sub-2': { origin: 'subagent' } },
+        }),
+      },
+    } as unknown as SessionsRuntimeLike
+
+    await expect(loadUngroupedSessions({ workspaces, sessions })).resolves.toEqual(['formal'])
+  })
 })
 
 describe('loadWorkspaceSessions', () => {
+  const sessionsWith = (ids: string[]): SessionsRuntimeLike => ({
+    list: { getSnapshot: () => ({ ids, byId: Object.fromEntries(ids.map(id => [id, {}])) }) },
+  } as unknown as SessionsRuntimeLike)
+
   it('preserves order and duplicates without mutating either snapshot', async () => {
     const sessionIds = [sid('b'), sid('a'), sid('b'), sid('archived')]
     const archivedSessionIds = [sid('archived')]
     const workspaces = { list: { getSnapshot: () => ({ archivedSessionIds }) } } as unknown as WorkspacesRuntimeLike
     const workspace = { sessionIds } as unknown as WorkspaceViewLike
 
-    await expect(loadWorkspaceSessions({ workspaces, workspace })).resolves.toEqual(['b', 'a', 'b'])
+    await expect(loadWorkspaceSessions({ workspaces, sessions: sessionsWith(['a', 'b', 'archived']), workspace }))
+      .resolves
+      .toEqual(['b', 'a', 'b'])
     expect(sessionIds).toEqual(['b', 'a', 'b', 'archived'])
     expect(archivedSessionIds).toEqual(['archived'])
   })
@@ -252,7 +274,26 @@ describe('loadWorkspaceSessions', () => {
     } as unknown as WorkspacesRuntimeLike
     const workspace = { sessionIds: (['s1', 's2', 's3'] as SessionId[]) } as unknown as WorkspaceViewLike
 
-    await expect(loadWorkspaceSessions({ workspaces, workspace })).resolves.toEqual(['s1', 's3'])
+    await expect(loadWorkspaceSessions({ workspaces, sessions: sessionsWith(['s1', 's2', 's3']), workspace }))
+      .resolves
+      .toEqual(['s1', 's3'])
+  })
+
+  it('excludes subagent and blank members the sidebar never renders', async () => {
+    const workspaces = {
+      list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }) },
+    } as unknown as WorkspacesRuntimeLike
+    const workspace = { sessionIds: (['formal', 'sub', 'blank', 'missing'] as SessionId[]) } as unknown as WorkspaceViewLike
+    const sessions = {
+      list: {
+        getSnapshot: () => ({
+          ids: ['formal', 'sub', 'blank'],
+          byId: { formal: {}, sub: { origin: 'subagent' }, blank: { blank: true } },
+        }),
+      },
+    } as unknown as SessionsRuntimeLike
+
+    await expect(loadWorkspaceSessions({ workspaces, sessions, workspace })).resolves.toEqual(['formal'])
   })
 })
 
