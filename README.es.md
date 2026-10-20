@@ -169,6 +169,7 @@ Consultá la [guía en inglés](<./docs/DEVELOPMENT.md>) o la [guía en chino](<
 - [dsh-pdf-reader](https://github.com/SkanderBog/dsh-pdf-reader) - Lectura de PDF página por página, OCR local, citas, búsqueda y recorte visual por @SkanderBog
 - [dsh-context-manager](https://github.com/SkanderBog/dsh-context-manager) - Revisá el contexto antes de aplicarlo y elegí, por grupo de historial completo, qué conservar, resumir u omitir del contenido anterior por @SkanderBog
 - [@ryuu-64/dsh-find-all](https://github.com/Ryuu-64/dsh-find-all) - Ctrl+F en la conversación actual para buscar en el historial guardado por @Ryuu-64
+- [dsh-office-kit](https://github.com/hairyf/dsh-office-kit) - Documentos de Office, PDF, presentaciones y hojas de cálculo por @hairyf
 
 ## Relacionados
 
