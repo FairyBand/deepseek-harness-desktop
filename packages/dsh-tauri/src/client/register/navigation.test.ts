@@ -206,4 +206,134 @@ describe('navigationFeature', () => {
     expect(clicked[1]).toContain('添加工作区')
     dispose()
   })
+
+  it('会话已消费过（刷新出的新文档）仍重新就位全屏形态，但不重复打开会话', async () => {
+    const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target', presentation: 'full-sidebar' }
+    const storage = host.window.sessionStorage as { setItem: (key: string, value: string) => void }
+    storage.setItem('__DSH_NAVIGATION_CONSUMED__', 'target')
+    const clicked: string[] = []
+    const marked: string[] = []
+    vi.stubGlobal('document', {
+      documentElement: { hasAttribute: () => false, setAttribute: (name: string, value: string) => marked.push(`${name}=${value}`) },
+      querySelector: (selector: string) => selector === '[data-sidebar-right-expand]' ? { click: () => clicked.push('expand') } : null,
+    })
+    let ids: string[] = []
+    const openSession = vi.fn(() => ({ status: 'opened', value: Promise.resolve() }))
+
+    const dispose = navigationFeature.call(ctxWithServices({
+      sessions: stubSessions(() => ids),
+      uiWorkspace: { openSession },
+    }))
+
+    ids = ['target']
+    await vi.advanceTimersByTimeAsync(500)
+    expect(openSession).not.toHaveBeenCalled()
+    expect(marked).toContain('data-dsh-tauri-full-sidebar=presenting')
+    expect(clicked).toEqual(['expand'])
+    dispose()
+  })
+
+  it('带 presentation=full-sidebar 的跳转在打开会话后展开右列并切入全屏', async () => {
+    const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target', presentation: 'full-sidebar' }
+    const clicked: string[] = []
+    const marked: string[] = []
+    let mode: { getAttribute: (name: string) => string | null, click: () => void } | undefined
+    const expand = { click: () => clicked.push('expand') }
+    vi.stubGlobal('document', {
+      documentElement: { hasAttribute: () => false, setAttribute: (name: string, value: string) => marked.push(`${name}=${value}`) },
+      querySelector: (selector: string) => {
+        if (selector === '[data-sidebar-right-mode]')
+          return mode ?? null
+        return selector === '[data-sidebar-right-expand]' ? expand : null
+      },
+    })
+    let ids: string[] = []
+    const openSession = vi.fn(() => ({ status: 'opened', value: Promise.resolve() }))
+
+    const dispose = navigationFeature.call(ctxWithServices({
+      sessions: stubSessions(() => ids),
+      uiWorkspace: { openSession },
+    }))
+
+    ids = ['target']
+    await vi.advanceTimersByTimeAsync(500)
+    expect(openSession).toHaveBeenCalledExactlyOnceWith('target')
+    expect(marked).toContain('data-dsh-tauri-full-sidebar=presenting')
+
+    await vi.advanceTimersByTimeAsync(250)
+    expect(clicked).toEqual(['expand'])
+
+    let fullscreen = 'fullscreen'
+    mode = {
+      getAttribute: () => fullscreen,
+      click: () => {
+        clicked.push('mode')
+        fullscreen = 'push'
+      },
+    }
+    await vi.advanceTimersByTimeAsync(500)
+    expect(clicked).toEqual(['expand', 'mode'])
+    expect(marked.at(-1)).toBe('data-dsh-tauri-full-sidebar=ready')
+
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(clicked).toEqual(['expand', 'mode'])
+    dispose()
+  })
+
+  it('会话被归档后关掉全屏窗口，而不是让它退回会话列表', () => {
+    const host = stubHost()
+    host.window[NAVIGATION_GLOBAL] = { sessionId: 'target', presentation: 'full-sidebar' }
+    vi.stubGlobal('document', {
+      documentElement: { hasAttribute: () => false, setAttribute: () => {} },
+    })
+    const sources: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        sources.push(this)
+      }
+    })
+    const dispose = navigationFeature.call(ctxWithServices({
+      sessions: stubSessions(() => ['target']),
+    }))
+
+    const closes = () => host.post.mock.calls.filter(call => (call[0] as { type?: string }).type === 'dsh://window:close')
+    expect(sources).toHaveLength(1)
+    expect(sources[0]?.url).toBe('/api/tauri/desktop/archive/events')
+    expect(closes()).toHaveLength(0)
+
+    sources[0]?.emit(JSON.stringify({ archivedSessionIds: ['other'] }))
+    expect(closes()).toHaveLength(0)
+
+    sources[0]?.emit(JSON.stringify({ archivedSessionIds: ['other', 'target'] }))
+    expect(closes()).toHaveLength(1)
+    expect(sources[0]?.closed).toBe(true)
+
+    sources[0]?.emit(JSON.stringify({ archivedSessionIds: ['target'] }))
+    expect(closes()).toHaveLength(1)
+    dispose()
+  })
 })
+
+/** 最小 `EventSource` 替身：只实现窗口侧用到的接口，测试里手动投递宿主帧。 */
+class FakeEventSource {
+  closed = false
+  private readonly listeners: Array<(event: { data: string }) => void> = []
+
+  constructor(readonly url: string) {}
+
+  addEventListener(_type: string, listener: (event: { data: string }) => void): void {
+    this.listeners.push(listener)
+  }
+
+  close(): void {
+    this.closed = true
+  }
+
+  emit(data: string): void {
+    for (const listener of this.listeners)
+      listener({ data })
+  }
+}

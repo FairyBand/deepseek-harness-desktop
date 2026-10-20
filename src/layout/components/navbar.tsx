@@ -16,7 +16,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getIdentifier } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Else, If, Then } from 'react-if-lite'
 import { cn } from 'tailwind-variants'
@@ -34,6 +34,7 @@ import { writeClipboardText } from '@/utils/clipboard'
 import { toast } from '@/utils/toast'
 import { RemoteShare } from './remote-share'
 import { RemoteSwitcher } from './remote-switcher'
+import { IS_MACOS, onDragRegionPointerDown, useMacOSFullscreen, useMaximized } from './window-chrome'
 
 /**
  * 壳层窗口顶部导航栏（44px，常驻）：
@@ -115,107 +116,77 @@ const CONFIG_TABS = [
   { id: 'dataDir', labelKey: 'config.dataDir' },
 ] as const
 
-/** WKWebView 的 macOS UA 稳定包含 Macintosh，用于切换平台原生窗口 chrome。 */
-function detectMacOS() {
-  return navigator.userAgent.includes('Macintosh')
+function handleWindowAction(action: 'minimize' | 'maximize' | 'close') {
+  const appWindow = getCurrentWindow()
+  switch (action) {
+    case 'minimize':
+      void appWindow.minimize()
+      break
+    case 'maximize':
+      void appWindow.toggleMaximize()
+      break
+    case 'close':
+      // 主窗口按设置驻留托盘（hide），附加窗口关闭即销毁：隐藏会留下没有恢复入口、
+      // 却仍在监听通知的窗口（点击通知时它们会一起冒出来）。
+      if (appWindow.label === 'main')
+        void appWindow.hide()
+      else
+        void appWindow.close()
+      break
+  }
 }
 
-const IS_MACOS = detectMacOS()
+/**
+ * Windows/Linux 自绘窗口控制（最小化 / 最大化切换 / 关闭）。
+ *
+ * 关闭语义由 Rust 按 label 决定（见 src-tauri/src/desktop/builder.rs 的 CloseRequested）：
+ * 主窗口按设置驻留托盘或退出，附加窗口直接销毁，这里只在文案上区分两者。
+ */
+export function WindowControls() {
+  const { t } = useTranslation()
+  const isMaximized = useMaximized()
+  const isMainWindow = getCurrentWindow().label === 'main'
 
-/** macOS 原生全屏时收起整条壳层导航栏。 */
-function useMacOSFullscreen() {
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  return (
+    <>
+      <Button
+        className="size-7"
+        isIconOnly
+        size="sm"
+        variant="ghost"
+        aria-label={t('nav.minimize')}
+        onPress={() => { handleWindowAction('minimize') }}
+      >
+        <Minus />
+      </Button>
 
-  useEffect(() => {
-    if (!IS_MACOS)
-      return
+      <Button
+        className="size-7"
+        isIconOnly
+        size="sm"
+        variant="ghost"
+        aria-label={t(isMaximized ? 'nav.restore' : 'nav.maximize')}
+        onPress={() => { handleWindowAction('maximize') }}
+      >
+        <If
+          cond={isMaximized}
+          then={<Copy style={{ width: 14, height: 14 }} />}
+          else={<Square style={{ width: 14, height: 14 }} />}
+        />
+      </Button>
 
-    const appWindow = getCurrentWindow()
-    let mounted = true
-    let unlisten: (() => void) | undefined
-
-    async function syncFullscreen() {
-      try {
-        const fullscreen = await appWindow.isFullscreen()
-        if (mounted)
-          setIsFullscreen(fullscreen)
-      }
-      catch (error) {
-        console.error('[Navbar] failed to sync fullscreen state:', error)
-      }
-    }
-
-    async function setupListener() {
-      try {
-        await syncFullscreen()
-        const stopListening = await appWindow.onResized(() => {
-          void syncFullscreen()
-        })
-        if (mounted)
-          unlisten = stopListening
-        else
-          stopListening()
-      }
-      catch (error) {
-        console.error('[Navbar] failed to listen for fullscreen state:', error)
-      }
-    }
-
-    void setupListener()
-    return () => {
-      mounted = false
-      unlisten?.()
-    }
-  }, [])
-
-  return isFullscreen
-}
-
-/** 最大化状态：Windows/Linux 自绘的最大化按钮据此在「最大化 / 还原」字形间切换（issue #673）。 */
-function useMaximized() {
-  const [isMaximized, setIsMaximized] = useState(false)
-
-  // keep:effect 显式注册/注销原生窗口 onResized 订阅（@reause/core 不覆盖窗口事件）
-  useEffect(() => {
-    const appWindow = getCurrentWindow()
-    let mounted = true
-    let unlisten: (() => void) | undefined
-
-    async function syncMaximized() {
-      try {
-        const maximized = await appWindow.isMaximized()
-        if (mounted)
-          setIsMaximized(maximized)
-      }
-      catch (error) {
-        console.error('[Navbar] failed to sync maximized state:', error)
-      }
-    }
-
-    async function setupListener() {
-      try {
-        await syncMaximized()
-        const stopListening = await appWindow.onResized(() => {
-          void syncMaximized()
-        })
-        if (mounted)
-          unlisten = stopListening
-        else
-          stopListening()
-      }
-      catch (error) {
-        console.error('[Navbar] failed to listen for maximized state:', error)
-      }
-    }
-
-    void setupListener()
-    return () => {
-      mounted = false
-      unlisten?.()
-    }
-  }, [])
-
-  return isMaximized
+      <Button
+        className="size-7 transition-colors enabled:hover:bg-danger/16 enabled:hover:text-danger"
+        isIconOnly
+        size="sm"
+        variant="ghost"
+        aria-label={t(isMainWindow ? 'nav.background' : 'nav.close')}
+        onPress={() => { handleWindowAction('close') }}
+      >
+        <Xmark />
+      </Button>
+    </>
+  )
 }
 
 /** 菜单项：左侧文案 + 右侧按键提示；没有生效绑定时只渲染文案（布局不变）。 */
@@ -255,7 +226,6 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isFullscreen = useMacOSFullscreen()
-  const isMaximized = useMaximized()
   const { data: appIdentifier } = useQuery(APP_IDENTIFIER_QUERY)
   // 只读取「dsh-tauri 插件是否已安装」；查询键与「插件」面板共用（同一份缓存），
   // 挂载时自动拉取，服务重启 / 插件操作后的失效由 store 与该缓存同步共同保证。
@@ -279,35 +249,6 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
   const tauriEnabled = plugins.some(plugin => plugin.id === TAURI_PLUGIN_ID)
   const isNightly = appIdentifier === 'dsh-tauri-nightly'
   const showUpdateAvailable = appIdentifier != null && !isNightly && updateInfo != null
-  const isMainWindow = getCurrentWindow().label === 'main'
-  function handleWindowAction(action: 'minimize' | 'maximize' | 'close') {
-    const appWindow = getCurrentWindow()
-    switch (action) {
-      case 'minimize':
-        void appWindow.minimize()
-        break
-      case 'maximize':
-        void appWindow.toggleMaximize()
-        break
-      case 'close':
-        if (isMainWindow)
-          void appWindow.hide()
-        else
-          void appWindow.close()
-        break
-    }
-  }
-
-  function onDragRegionPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    // data-tauri-drag-region 原生只监听鼠标事件（mousedown/mouseup），
-    // 触摸屏/笔输入不会触发原生拖拽（见 tauri#13762）。
-    // 这里对非鼠标输入手动调用 startDragging 进入系统边拖边跟随。
-    if (event.pointerType === 'mouse')
-      return
-    // 阻止浏览器生成兼容鼠标事件，避免与 data-tauri-drag-region 的原生拖拽重复触发。
-    event.preventDefault()
-    void getCurrentWindow().startDragging()
-  }
 
   function onHelpAction(key: HelpAction) {
     if (key === 'toggle-devtools')
@@ -859,42 +800,7 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
       <RemoteSwitcher onChange={onRemoteChange} visible={onToggleSidebar != null} onManage={onOpenMachineManager} onSync={onOpenSyncToRemote} />
 
       <If cond={!IS_MACOS}>
-        <Button
-          className="size-7"
-          isIconOnly
-          size="sm"
-          variant="ghost"
-          aria-label={t('nav.minimize')}
-          onPress={() => { handleWindowAction('minimize') }}
-        >
-          <Minus />
-        </Button>
-
-        <Button
-          className="size-7"
-          isIconOnly
-          size="sm"
-          variant="ghost"
-          aria-label={t(isMaximized ? 'nav.restore' : 'nav.maximize')}
-          onPress={() => { handleWindowAction('maximize') }}
-        >
-          <If
-            cond={isMaximized}
-            then={<Copy style={{ width: 14, height: 14 }} />}
-            else={<Square style={{ width: 14, height: 14 }} />}
-          />
-        </Button>
-
-        <Button
-          className="size-7 transition-colors enabled:hover:bg-danger/16 enabled:hover:text-danger"
-          isIconOnly
-          size="sm"
-          variant="ghost"
-          aria-label={t(isMainWindow ? 'nav.background' : 'nav.close')}
-          onPress={() => { handleWindowAction('close') }}
-        >
-          <Xmark />
-        </Button>
+        <WindowControls />
       </If>
     </div>
   )

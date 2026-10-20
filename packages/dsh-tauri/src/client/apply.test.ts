@@ -11,6 +11,7 @@ const EXPECTED_LABELS = [
   'dsh-tauri: navigation (session target, new session, add workspace)',
   'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)',
   'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)',
+  'dsh-tauri: sidebar full window (open-in-new-window button + full-screen setup)',
   'dsh-tauri: account sign-in (auto-open the authorize url)',
   'dsh-tauri: shortcuts (catalog report + edit commands)',
 ]
@@ -283,7 +284,7 @@ describe('apply', () => {
     expect(env.styles).toHaveLength(1)
     expect(env.sent.filter(message => message.type === 'dsh://plugin-error')).toEqual([])
     expect(env.windowListeners()).toBe(3)
-    expect(env.documentListeners()).toBe(2)
+    expect(env.documentListeners()).toBe(3)
 
     for (const dispose of disposers.splice(0))
       await dispose()

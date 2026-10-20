@@ -4,6 +4,7 @@ import { registerAppearance } from './register/appearance'
 import { navigationFeature } from './register/navigation'
 import { shortcutsFeature } from './register/shortcuts'
 import { sidebarFeature } from './register/sidebar'
+import { sidebarFullwindowFeature } from './register/sidebar-fullwindow'
 import { sidebarTweaksFeature } from './register/sidebar-tweaks'
 import { registerStyle } from './register/style'
 import { zoomShortcutFeature } from './register/zoom-shortcut'
@@ -12,6 +13,7 @@ const SIDEBAR_TOGGLE_EFFECT = 'dsh-tauri: sidebar (toggle command + collapsed re
 const NAVIGATION_EFFECT = 'dsh-tauri: navigation (session target, new session, add workspace)'
 const ZOOM_SHORTCUT_EFFECT = 'dsh-tauri: zoom shortcuts (ctrl/cmd +/-/0)'
 const SIDEBAR_TWEAKS_EFFECT = 'dsh-tauri: sidebar tweaks (hide collapse toggle, center brand)'
+const SIDEBAR_FULLWINDOW_EFFECT = 'dsh-tauri: sidebar full window (open-in-new-window button + full-screen setup)'
 const STYLE_EFFECT = 'dsh-tauri: style (sidebar background)'
 const ACCOUNT_SIGN_IN_EFFECT = 'dsh-tauri: account sign-in (auto-open the authorize url)'
 const APPEARANCE_EFFECT = 'dsh-tauri: appearance'
@@ -29,6 +31,7 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.effect(zoomShortcutFeature, ZOOM_SHORTCUT_EFFECT)
   ctx.effect(sidebarTweaksFeature, SIDEBAR_TWEAKS_EFFECT)
+  ctx.effect(sidebarFullwindowFeature, SIDEBAR_FULLWINDOW_EFFECT)
   ctx.effect(accountSignInFeature, ACCOUNT_SIGN_IN_EFFECT)
   ctx.effect(shortcutsFeature, SHORTCUTS_EFFECT)
 }

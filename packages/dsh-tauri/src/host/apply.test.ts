@@ -18,6 +18,7 @@ function activate() {
   })
   const ctx = {
     connection: { authorizeIndex: () => false },
+    webServer: { register: () => () => {} },
     effect: (callback: () => unknown) => { callback() },
     on,
   } as unknown as HostContext

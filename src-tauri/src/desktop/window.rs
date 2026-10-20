@@ -121,11 +121,17 @@ pub fn on_page_load(
 /// 跳转信息全局名（与 `packages/dsh-tauri/src/client/register/navigation.ts` 逐字一致）。
 const NAVIGATION_GLOBAL: &str = "__DSH_NAVIGATION__";
 
+/// 「全屏右栏」窗口形态：壳层换用 `full-sidebar-navbar`，页面把右栏展开并切进全屏。
+/// 载荷值同样与插件 `sidebar-fullwindow.ts` 逐字一致。
+const PRESENTATION_FULL_SIDEBAR: &str = "full-sidebar";
+
 /// 壳层导航栏「文件 → 新建窗口」：以同一 `index.html` 再开一个独立 webview 窗口。
 ///
 /// 传入 `session_id` 时把跳转目标注入新窗口的全部 frame，由 dsh-tauri 插件在启动后接收并
 /// 打开该会话。注入而不是拼 `index.html#...`：hash 只有壳层可读，内嵌 dsh 的插件拿不到，
 /// 只能退回壳层轮询转发，并把新窗口误当成 remote 视图。
+///
+/// `presentation` 与 `session_id` 同行：壳层读它决定导航栏形态，插件读它把右栏展开成全屏。
 ///
 /// 异步命令（不占用主线程）是唯一安全的调用侧：`WebviewWindowBuilder::build()`
 /// 需要主线程事件循环回包，主线程调用会死锁（与 `pet::ensure_pet_window` 同约束）。
@@ -134,10 +140,23 @@ pub async fn create_app_window(
     app_handle: AppHandle<Wry>,
     window: WebviewWindow<Wry>,
     session_id: Option<String>,
+    presentation: Option<String>,
 ) -> Result<(), String> {
+    if let Some(value) = presentation.as_deref() {
+        if value != PRESENTATION_FULL_SIDEBAR {
+            return Err("WINDOW_CREATE_FAILED: unsupported presentation".into());
+        }
+        if session_id.is_none() {
+            return Err("WINDOW_CREATE_FAILED: presentation requires sessionId".into());
+        }
+    }
+    log::info!(
+        "[window] create_app_window from {}: session={session_id:?} presentation={presentation:?}",
+        window.label()
+    );
     let navigation = session_id
         .as_deref()
-        .map(session_navigation_script)
+        .map(|session_id| session_navigation_script(session_id, presentation.as_deref()))
         .transpose()?;
     let _transition = crate::service::workflow::acquire_core_transition().await?;
     let profile = crate::service::workflow::instances::window_profile(&app_handle, window.label());
@@ -151,23 +170,42 @@ pub async fn create_app_window(
     .map_err(|error| format!("WINDOW_CREATE_FAILED: {error}"))
 }
 
-/// 校验会话 id 并生成跳转脚本；JSON 序列化负责转义，避免把用户输入拼成可执行代码。
-fn session_navigation_script(session_id: &str) -> Result<String, String> {
+/// 校验会话 id 与窗口形态并生成跳转脚本；JSON 序列化负责转义，避免把用户输入拼成可执行代码。
+fn session_navigation_script(
+    session_id: &str,
+    presentation: Option<&str>,
+) -> Result<String, String> {
     if session_id.trim().is_empty() || session_id.len() > 512 {
         return Err("WINDOW_CREATE_FAILED: invalid sessionId".into());
     }
-    let payload = serde_json::json!({ "sessionId": session_id });
+    let payload = match presentation {
+        None => serde_json::json!({ "sessionId": session_id }),
+        Some(PRESENTATION_FULL_SIDEBAR) => serde_json::json!({
+            "sessionId": session_id,
+            "presentation": PRESENTATION_FULL_SIDEBAR,
+        }),
+        Some(_) => return Err("WINDOW_CREATE_FAILED: unsupported presentation".into()),
+    };
     Ok(format!("globalThis.{NAVIGATION_GLOBAL} = {payload};"))
 }
 
 #[cfg(test)]
 mod session_navigation_tests {
-    use super::session_navigation_script;
+    use super::{session_navigation_script, NAVIGATION_GLOBAL, PRESENTATION_FULL_SIDEBAR};
+
+    fn payload_of(script: &str) -> serde_json::Value {
+        let assignment = format!("globalThis.{NAVIGATION_GLOBAL} = ");
+        let payload = script
+            .strip_prefix(assignment.as_str())
+            .and_then(|rest| rest.strip_suffix(';'))
+            .expect("script is one global assignment");
+        serde_json::from_str(payload).expect("payload is json")
+    }
 
     #[test]
     fn session_navigation_script_assigns_the_session_target_to_the_shared_global() {
         assert_eq!(
-            session_navigation_script("session &/?#").unwrap(),
+            session_navigation_script("session &/?#", None).unwrap(),
             r#"globalThis.__DSH_NAVIGATION__ = {"sessionId":"session &/?#"};"#
         );
     }
@@ -175,8 +213,25 @@ mod session_navigation_tests {
     #[test]
     fn session_navigation_script_escapes_values_through_json_serialization() {
         assert_eq!(
-            session_navigation_script("a\"b\\c\nd").unwrap(),
+            session_navigation_script("a\"b\\c\nd", None).unwrap(),
             r#"globalThis.__DSH_NAVIGATION__ = {"sessionId":"a\"b\\c\nd"};"#
+        );
+    }
+
+    #[test]
+    fn session_navigation_script_carries_the_full_sidebar_presentation() {
+        let payload = payload_of(
+            &session_navigation_script("session-1", Some(PRESENTATION_FULL_SIDEBAR)).unwrap(),
+        );
+        assert_eq!(payload["sessionId"], "session-1");
+        assert_eq!(payload["presentation"], PRESENTATION_FULL_SIDEBAR);
+    }
+
+    #[test]
+    fn session_navigation_script_rejects_unknown_presentations() {
+        assert_eq!(
+            session_navigation_script("session-1", Some("detached")),
+            Err("WINDOW_CREATE_FAILED: unsupported presentation".into())
         );
     }
 
@@ -184,11 +239,11 @@ mod session_navigation_tests {
     fn session_navigation_script_rejects_empty_blank_or_oversized_identifiers() {
         for id in ["", " ", " \t\n", &"s".repeat(513)] {
             assert_eq!(
-                session_navigation_script(id),
+                session_navigation_script(id, None),
                 Err("WINDOW_CREATE_FAILED: invalid sessionId".into())
             );
         }
-        assert!(session_navigation_script(&"s".repeat(512)).is_ok());
+        assert!(session_navigation_script(&"s".repeat(512), None).is_ok());
     }
 }
 

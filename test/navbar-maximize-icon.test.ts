@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { readLocale, readSource } from './setup/read-source'
 
 const navbarSource = readSource('src/layout/components/navbar.tsx')
+const chromeSource = readSource('src/layout/components/window-chrome.ts')
 
 const zhCN = readLocale('zh-CN')
 const enUS = readLocale('en-US')
@@ -18,8 +19,8 @@ describe('maximize button follows the window state', () => {
     // 断言「订阅来源」而非孤立 token：初读 + resize 重读缺一不可，
     // 只留其中一个都会让拖拽区双击 / Win+↑ 等原生路径漏同步。
     expect(navbarSource).toMatch(/const isMaximized = useMaximized\(\)/)
-    expect(navbarSource).toMatch(/await appWindow\.isMaximized\(\)/)
-    expect(navbarSource).toMatch(/await appWindow\.onResized\(/)
+    expect(chromeSource).toMatch(/await appWindow\.isMaximized\(\)/)
+    expect(chromeSource).toMatch(/await appWindow\.onResized\(/)
   })
 
   it('swaps the glyph between Copy (restore) and Square (maximize)', () => {
