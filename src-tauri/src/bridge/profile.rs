@@ -22,7 +22,8 @@ pub fn create_profile(app_handle: AppHandle, name: String) -> Result<profile::Pr
     profile::create(&app_handle, &name)
 }
 
-/// 切换当前窗口的档案并持久化下次启动默认档案。
+/// 切换当前窗口的档案。只有主窗口的切换会持久化成下次启动档案；额外窗口的
+/// 切换只在本次会话生效，否则退出前在额外窗口选过的档案会顶替主窗口档案。
 #[tauri::command]
 pub async fn set_active_profile(
     app_handle: AppHandle,
@@ -31,7 +32,11 @@ pub async fn set_active_profile(
 ) -> Result<profile::Profile, String> {
     let _transition = crate::service::workflow::acquire_core_transition().await?;
     let old = crate::service::workflow::instances::window_profile(&app_handle, window.label());
-    let mut selected = profile::set_active(&app_handle, &id)?;
+    let mut selected = if window.label() == crate::desktop::builder::MAIN_WINDOW_LABEL {
+        profile::set_active(&app_handle, &id)?
+    } else {
+        profile::select(&app_handle, &id)?
+    };
     selected.active = true;
     crate::service::workflow::instances::bind_window(window.label(), &id);
     if old != id && !crate::service::workflow::instances::is_attached(&old) {
@@ -158,6 +163,29 @@ mod tests {
         let delete = removal.find("profile::remove(&app_handle, &id)").unwrap();
         assert!(lock < attached && attached < scope && scope < stop);
         assert!(stop < confirmed && confirmed < delete);
+    }
+
+    #[test]
+    fn profile_switch_persists_the_startup_profile_only_from_the_main_window() {
+        let source = include_str!("profile.rs");
+        let switch = source
+            .split("pub async fn set_active_profile(")
+            .nth(1)
+            .unwrap()
+            .split("pub async fn remove_profile(")
+            .next()
+            .unwrap();
+        let guard = switch
+            .find("window.label() == crate::desktop::builder::MAIN_WINDOW_LABEL")
+            .unwrap();
+        let persist = switch
+            .find("profile::set_active(&app_handle, &id)")
+            .unwrap();
+        let transient = switch.find("profile::select(&app_handle, &id)").unwrap();
+        assert!(
+            guard < persist && guard < transient,
+            "切换档案必须先按窗口区分：只有主窗口持久化下次启动档案"
+        );
     }
 
     #[test]

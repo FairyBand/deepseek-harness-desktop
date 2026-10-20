@@ -449,23 +449,34 @@ pub fn create(app_handle: &AppHandle, name: &str) -> Result<Profile, String> {
     })
 }
 
-/// 切换当前使用中的档案（持久化到桌面端 store）。
+/// 校验档案可切换并返回它在列表中的镜像，但不写入下次启动档案。
+pub fn select(app_handle: &AppHandle, id: &str) -> Result<Profile, String> {
+    ensure_selectable(app_handle, id)?;
+    list(app_handle)
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| "PROFILE_NOT_FOUND: profile disappeared after switch".to_string())
+}
+
+/// 切换当前使用中的档案（持久化到桌面端 store，即下次启动的主窗口档案）。
 pub fn set_active(app_handle: &AppHandle, id: &str) -> Result<Profile, String> {
-    // 路径安全：拒绝 `..`、绝对路径、分隔符（防御式——id 理论上来自
-    // normalize 产物，但 CLI/配置可能把任意字符串塞进设置），并用
-    // fs_guard::join_safe 组装档案根目录下的目标路径。
+    ensure_selectable(app_handle, id)?;
+    let mut setting = config::get_store_dat_setting(app_handle);
+    setting.active_profile = id.to_string();
+    config::set_store_dat_setting(app_handle, setting);
+    select(app_handle, id)
+}
+
+// 路径安全：拒绝 `..`、绝对路径、分隔符（防御式——id 理论上来自
+// normalize 产物，但 CLI/配置可能把任意字符串塞进设置），并用
+// fs_guard::join_safe 组装档案根目录下的目标路径。
+fn ensure_selectable(app_handle: &AppHandle, id: &str) -> Result<(), String> {
     let profiles_root = config::get_dsh_data_path(app_handle).join("profiles");
     let dir = fs_guard::join_safe(&profiles_root, id)?;
     if id != DEFAULT_PROFILE && !dir.is_dir() {
         return Err(format!("PROFILE_NOT_FOUND: profile {id} does not exist"));
     }
-    let mut setting = config::get_store_dat_setting(app_handle);
-    setting.active_profile = id.to_string();
-    config::set_store_dat_setting(app_handle, setting);
-    list(app_handle)
-        .into_iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| "PROFILE_NOT_FOUND: profile disappeared after switch".to_string())
+    Ok(())
 }
 
 /// 确保引导档案目录存在且含核心 web bundle 层（以 `profiles_root` 注入，便于单测）。
