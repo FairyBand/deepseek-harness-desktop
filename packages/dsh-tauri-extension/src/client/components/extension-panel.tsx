@@ -1,5 +1,4 @@
 import type { ReactElement } from 'react'
-import type { MarketFace } from '../service/market.types'
 import { SegmentedControl } from 'dsh-tauri-ui/client'
 import { useId, useState } from 'react'
 import { locale } from '../locales'
@@ -10,7 +9,6 @@ import { SkillsTab } from './skills-tab'
 export interface ExtensionPanelProps {
   createSkill: () => Promise<void>
   plugins?: ReactElement
-  market: MarketFace | undefined
 }
 
 interface ExtensionTab {
@@ -19,15 +17,11 @@ interface ExtensionTab {
   render: () => ReactElement
 }
 
-export function ExtensionPanel({ createSkill, market, plugins }: ExtensionPanelProps): ReactElement {
+export function ExtensionPanel({ createSkill, plugins }: ExtensionPanelProps): ReactElement {
   const t = locale.text
   const tabsId = useId()
-  const marketFace = market
   const rows: ExtensionTab[] = [
     ...(plugins === undefined ? [] : [{ id: 'plugins', label: t('pluginsTab'), render: () => plugins }]),
-    ...(marketFace === undefined
-      ? []
-      : [{ id: 'market', label: t('marketTab'), render: () => <>{marketFace.render({ preferredSubsectionId: 'installed' })}</> }]),
     { id: 'skills', label: t('skillsTab'), render: () => <SkillsTab t={t} createSkill={createSkill} /> },
     { id: 'mcp', label: t('mcpTab'), render: () => <McpTab t={t} /> },
   ]

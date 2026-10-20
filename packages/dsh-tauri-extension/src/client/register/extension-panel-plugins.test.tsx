@@ -142,7 +142,7 @@ function Plugins({ floor = false, initial = 'list', backLabel = '返回插件', 
 }
 
 function renderPanel(plugins = <Plugins />) {
-  return render(<ExtensionPanel plugins={plugins} market={{ version: 1, render: () => <section>Market</section>, setSettingsVisible: () => {}, settingsVisible: () => false }} createSkill={async () => {}} />)
+  return render(<ExtensionPanel plugins={plugins} createSkill={async () => {}} />)
 }
 
 async function settle(): Promise<void> {
@@ -169,7 +169,7 @@ describe('embedded official plugin headers', () => {
     install()
     const view = renderPanel()
     const tabs = view.getAllByRole('tab')
-    expect(tabs.map(tab => tab.textContent)).toEqual(['插件', '市场', '技能', 'MCP'])
+    expect(tabs.map(tab => tab.textContent)).toEqual(['插件', '技能', 'MCP'])
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true')
     const mainTitle = view.getByRole('heading', { name: '官方插件', level: 1 })
     expect(getComputedStyle(mainTitle).paddingLeft).toBe('32px')

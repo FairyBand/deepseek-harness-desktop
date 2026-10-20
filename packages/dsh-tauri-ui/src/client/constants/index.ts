@@ -39,9 +39,6 @@ export const NEW_SESSION_LABELS = ['新建会话', 'New session'] as const
 /** 官方未分组分组行的行键：`workspace:` + 官方 `UNGROUPED_KEY`（后者为空串）。 */
 export const UNGROUPED_ROW_KEY = 'workspace:'
 
-/** dsh-im 客户端插件经 `ctx.provide` 发布的反射服务名（4.22.0 起）。 */
-export const DSH_IM_CLIENT_SERVICE = 'dshImClient'
-
 export const STYLES_EFFECT = `${PLUGIN_ID}: styles`
 export const LOCALE_EFFECT = `${PLUGIN_ID}: locale`
 export const SEAT_EFFECT = `${PLUGIN_ID}: shell.overlay seat`
@@ -49,7 +46,6 @@ export const SECTIONS_EFFECT = `${PLUGIN_ID}: settings sections projection`
 export const SETTINGS_EFFECT = `${PLUGIN_ID}: settings panel`
 export const OBSTRUCTIONS_EFFECT = `${PLUGIN_ID}: settings obstructions`
 export const SETTINGS_OPEN_EFFECT = `${PLUGIN_ID}: settings deep-link`
-export const IM_PANEL_EFFECT = `${PLUGIN_ID}: im panel`
 export const HERO_WORKSPACE_EFFECT = `${PLUGIN_ID}: hero workspace picker`
 export const NEW_SESSION_EFFECT = `${PLUGIN_ID}: sidebar new session`
 export const UNGROUPED_NEW_SESSION_EFFECT = `${PLUGIN_ID}: sidebar ungrouped new session`

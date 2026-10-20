@@ -16,9 +16,6 @@
 [submodule "source/dsh-plugin-capabilities"]
 	path = source/dsh-plugin-capabilities
 	url = https://github.com/qinyre/dsh-plugin-capabilities
-[submodule "source/dsh-market"]
-	path = source/dsh-market
-	url = https://github.com/dsh-market/dsh-market.git
 [submodule "source/deepseek-harness"]
 	path = source/deepseek-harness
 	url = https://github.com/deepseek-ai/deepseek-harness

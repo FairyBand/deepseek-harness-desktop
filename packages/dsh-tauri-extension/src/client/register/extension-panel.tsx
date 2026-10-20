@@ -4,16 +4,14 @@ import { Icon, IconSparkleRegular, mountStyle, Panel, Puzzle, SlotOutlet } from 
 import { definePanel, defineRegister, hidePanel } from 'dsh-tauri/client'
 import { useSyncExternalStore } from 'react'
 import { ExtensionPanel } from '../components/extension-panel'
-import { MARKET_SERVICE_NAME, PANEL_ACTION_ORDER, PANEL_ID, PLUGINS_MORE_HEADER_SELECTOR } from '../constants'
+import { PANEL_ACTION_ORDER, PANEL_ID, PLUGINS_MORE_HEADER_SELECTOR } from '../constants'
 import { locale } from '../locales'
-import { currentScope, hostsMarketPanel, readMarket } from '../service/market'
 import { store } from '../store'
 import { pluginsStyle } from '../styles/plugins.cssr'
 import { chooseWorkspace, sessionSnapshotOf, workspaceSnapshotOf } from './extension-panel.utils'
 
 export const extensionPanelFeature = defineRegister<ClientContext>((controller, ctx, adapter) => {
   let panel: PanelHandle | undefined
-  const embedMarket = hostsMarketPanel(currentScope())
   const slots = adapter.service<SlotRegistry>('slots')
   let restorePlugins: (() => void) | undefined
 
@@ -91,17 +89,6 @@ export const extensionPanelFeature = defineRegister<ClientContext>((controller, 
   syncPlugins()
   controller.add(() => restorePlugins?.())
 
-  ctx.inject([MARKET_SERVICE_NAME], () => {
-    if (!embedMarket)
-      return
-    const face = readMarket(ctx)
-    if (face === undefined)
-      return
-    const restore = face.settingsVisible()
-    face.setSettingsVisible(false)
-    return () => face.setSettingsVisible(restore)
-  })
-
   async function createSkill(): Promise<void> {
     const id = chooseWorkspace(
       sessionSnapshotOf(adapter.sessions.list?.getSnapshot()),
@@ -136,7 +123,7 @@ export const extensionPanelFeature = defineRegister<ClientContext>((controller, 
       }
       return (
         <Panel>
-          <ExtensionPanel plugins={plugins} createSkill={createSkill} market={embedMarket ? readMarket(ctx) : undefined} />
+          <ExtensionPanel plugins={plugins} createSkill={createSkill} />
         </Panel>
       )
     },

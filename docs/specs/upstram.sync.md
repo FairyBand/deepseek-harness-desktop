@@ -158,14 +158,13 @@ git diff --check
 | `dsh-tauri-pet` | `QCYTSN/dsh-dafeiyu` | `source/dsh-dafeiyu` | `v0.1.14` (`9c0588c`) | `v0.1.14` (`9c0588c`) | `v0.1.10`–`v0.1.14` 已评估：零可移植（文案表几无变化；其 `includeSubagents` opt-in 与本仓硬排除子代理会话**有意相反**）；无待评估项 | [日志](https://www.google.com/search?q=../packages/dsh-tauri-pet/docs/sync-log.md) |
 | `dsh-tauri-pet` | `Skylarking/dsh-plugin-codex-pets` | `source/dsh-plugin-codex-pets` | `22e93f4` | - | 未评估 main 分支更新 | [日志](https://www.google.com/search?q=../packages/dsh-tauri-pet/docs/sync-log.md) |
 | 桌宠窗口 | `ayangweb/BongoCat` | `source/BongoCat` | `44f44bc` | `v1.1.0` | HEAD 已超前 Tag 5 个 Commit | [日志](https://www.google.com/search?q=../packages/dsh-tauri-pet/docs/sync-log.md) |
-| `dsh-tauri-extension` | `qinyre/dsh-plugin-capabilities` | `source/dsh-plugin-capabilities` | `v0.3.11` (`52e3f66`) | `v0.3.11` | 暂无待评估项（该上游的 Market 模块确定不移植；扩展面板的市场页改为直接消费 `dshmarket` 的 `market` 服务） | [日志](../packages/dsh-tauri-extension/docs/sync-log.md) |
-| `dsh-tauri-extension`（市场标签页） | `dsh-market/dsh-market` | `source/dsh-market` | `v1.47.0-6` (`53f793e`) | `v1.47.0-6` (`53f793e`) | 非代码移植：消费其 `ctx.provide('market')` 服务。`render()` 尚未发版，故先以 `source` 子模块承载；待上游发版后改为常规 npm 依赖并移除子模块 | - |
+| `dsh-tauri-extension` | `qinyre/dsh-plugin-capabilities` | `source/dsh-plugin-capabilities` | `v0.3.11` (`52e3f66`) | `v0.3.11` | 暂无待评估项（该上游的 Market 模块确定不移植，扩展面板也不再消费 `dshmarket` 的 `market` 服务） | [日志](../packages/dsh-tauri-extension/docs/sync-log.md) |
 | `dsh-tauri-scheduler` | `MichengAI/dsh-automation` | `source/dsh-automation` | `ecfe1e6` (+`c426c3d`) | `v0.1.51` (`ecfe1e6`) | `v0.1.33`–`v0.1.42` 全部不采纳（2026-09-16）；`v0.1.43`–`v0.1.51` 已评估并采纳 3 项（`116c953`+`a0c4cc6` 增量摘要、`0bde1a4` 插件卸载记 `cancelled`），其余不采纳/归档（2026-09-28）；无待评估项 | [日志](https://www.google.com/search?q=../packages/dsh-tauri-scheduler/docs/sync-log.md) |
 | `dsh-tauri`（内核载体契约） | `deepseek-ai/deepseek-harness` | `source/deepseek-harness` | `dsh-v0.2.0-rc.2` (`639ed015397`) | `dsh-v0.2.0-rc.2` (`639ed015397`) | 区间 187 commits（140 非 merge，1022 文件）：宿主契约（鉴权闸门 / index 注入行 / `dshDesktop` 标记 / `__DSH_BOOT__`）10 份源文件 blob SHA 逐字节相等，仅基线推进；`FALLBACK_DSH_TAG` 保留最后已打包的 rc.1 tag（打包仓库未产出 rc.2 前不杜撰 buildId）；Windows 标题栏/全屏 DOM 契约、新可选包、Electron 专属适配、上游 pi-ai 0.87.1 升级归档不实施（本地不枚举 pi-ai compat 字段，无待办；rc.2 的模型选择器搜索能力已择优落到 `dsh-tauri-model` 候选选择器，登记见该包 `THIRD_PARTY_NOTICES.md`）；无待评估项 | [日志](../packages/dsh-tauri/docs/sync-log.md) |
 
 ### 5.2 已知配置与异常记录
 
-* **子模块绑定**：`source/*` 下 8 个参考仓库均已引入 `.gitmodules`。其中 `source/dsh-market` 是 2026-09 新增的**临时**参考仓库：上游 `render()` API 只存在于 main 分支，尚未发版，故先以源码子模块承载供 GitHub 源安装测试；上游发版后应改为 npm 依赖并移除该子模块。当前 gitlink 配置已暂存，待提交。
+* **子模块绑定**：`source/*` 下参考仓库均已引入 `.gitmodules`。`source/dsh-market` 曾为扩展面板的市场标签页临时引入（上游 `render()` 只存在于 main 分支），该标签页已在 #1167 移除，对应的 gitlink 与 `.gitmodules` 条目一并删除。
 * **内核参考仓库**：`source/deepseek-harness`（`deepseek-ai/deepseek-harness`，基线 `639ed015397` = `dsh-v0.2.0-rc.2`）是**只读对照基线**，为 Issue #496（非 Electron 壳可复用的无端口嵌入式宿主）提供契约比对依据。按 §1.2，DSH 内核**排除在本同步流程之外**：此子模块不参与择优采纳，只用于核对宿主契约与登记核心版本基线（登记见 §5.1 末行，明细见 `packages/dsh-tauri/docs/sync-log.md`）。桌面端载体鉴权适配的实现见 `packages/dsh-tauri/src/host/service/gate.ts`（`DSH_TAURI_EMBEDDED=1` 时覆写两道鉴权闸门）。
 * **路径纠偏记录**：
 * `source/dsh-automation` 已纠正 gitlink 配置，子模块 HEAD 指向 `f1bc91a`。
