@@ -1,17 +1,22 @@
-//! 剪贴板图片回退桥：让 Linux/WebKitGTK 下 iframe 的「贴图」走原生剪贴板。
+//! 剪贴板回退桥：让 Linux/WebKitGTK 下 iframe 的「贴图 / 贴文件」走原生剪贴板。
 //!
-//! WebKitGTK 不通过 Web API 暴露 `image/*` 剪贴板条目，因此截图复制到系统剪贴板后，
-//! 在桌面端内嵌的 dsh iframe 中输入框按 Ctrl+V 时，`paste` 事件的
-//! `clipboardData` 里既没有图片也没有文本。本脚本在**捕获阶段**监听 `paste`，
-//! 检测到「无图片且无文本」时：preventDefault → 向宿主 postMessage 请求读取系统
-//! 剪贴板图片（宿主调用 `bridge::read_clipboard_image`）→ 拿到 PNG data URL →
-//! 构造 File 并重发一次合成 `paste` 事件给当前焦点元素，让 dsh 聊天框按普通
-//! 贴图路径处理，从而与浏览器行为一致。
+//! WebKitGTK 不通过 Web API 暴露 `image/*` 与文件（`text/uri-list` /
+//! `x-special/gnome-copied-files`）剪贴板条目，因此截图或从文件管理器复制文件后，
+//! 在桌面端内嵌的 dsh iframe 中输入框按 Ctrl+V 时，`paste` 事件的 `clipboardData`
+//! 里既没有图片、没有文件、往往也没有文本。本脚本在**捕获阶段**监听 `paste`，
+//! 检测到「无图片且无文本」时：preventDefault → 先向宿主请求读取系统剪贴板文件
+//! （宿主调用 `bridge::read_clipboard_files`）→ 有文件则把全部条目塞进同一个
+//! `DataTransfer` 构造 `File` 并重发一次合成 `paste`；无文件再回退读取剪贴板图片
+//! （宿主调用 `bridge::read_clipboard_image`）→ 拿到 PNG data URL → 构造 `File`
+//! 重发合成 `paste`。两条路径都让 dsh 聊天框按普通附件处理，与浏览器行为一致。
 //!
 //! 与 [`crate::desktop::notification::NOTIFICATION_SHIM_JS`] / [`crate::desktop::compat::ABORT_SIGNAL_ANY_SHIM_JS`]
 //! 走同一套注入通道（Windows 在 FrameCreated → ContentLoading 时 ExecuteScript，
 //! 其余平台 `initialization_script_for_all_frames`）。脚本带 `__dsh_clipboard_image_bridge__`
 //! 幂等守卫，重复注入安全；只处理「直接 iframe」发来的剪贴板请求，避免多层 iframe 误转发。
+//!
+//! 安全：文件路径完全来自**系统剪贴板**（宿主侧读取并回传），iframe 只能请求
+//! 「读剪贴板」而不能指定路径，因此不能借本桥读取本机任意文件（issue #1160）。
 
 pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
   if (window.__dsh_clipboard_image_bridge__) return;
@@ -23,17 +28,19 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
   var REQ_SRC = 'dsh-clipboard-image-bridge';
   var REQ_TYPE = 'dsh://clipboard-image:read';
   var RES_TYPE = 'dsh://clipboard-image:reply';
+  var REQ_FILES_TYPE = 'dsh://clipboard-files:read';
+  var RES_FILES_TYPE = 'dsh://clipboard-files:reply';
 
   var reqSeq = 0;
-  var pending = {}; // id -> { resolve, target }
+  var pending = {}; // id -> resolve（宿主回包按 type 分发，携带原始 data 调用）
 
-  function requestClipboardImage(target) {
+  function request(reqType) {
     return new Promise(function (resolve) {
       reqSeq += 1;
       var id = 'req-' + reqSeq;
-      pending[id] = { resolve: resolve, target: target };
+      pending[id] = resolve;
       try {
-        window.parent.postMessage({ source: REQ_SRC, type: REQ_TYPE, id: id }, '*');
+        window.parent.postMessage({ source: REQ_SRC, type: reqType, id: id }, '*');
       } catch (_) {
         delete pending[id];
         resolve(null);
@@ -45,14 +52,15 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
   window.addEventListener('message', function (event) {
     if (event.source !== window.parent) return;
     var data = event.data;
-    if (!data || typeof data !== 'object' || data.type !== RES_TYPE) return;
-    var item = pending[data.id];
-    if (!item) return;
+    if (!data || typeof data !== 'object') return;
+    if (data.type !== RES_TYPE && data.type !== RES_FILES_TYPE) return;
+    var resolve = pending[data.id];
+    if (!resolve) return;
     delete pending[data.id];
-    item.resolve(data.data_url || null);
+    resolve(data);
   });
 
-  // 剪贴板事件里是否已带图片（非 WebKitGTK 场景）：不介入，交 dsh 自身处理
+  // 剪贴板事件里是否已带图片 / 文件（非 WebKitGTK 场景）：不介入，交 dsh 自身处理
   function hasImageData(dt) {
     if (!dt) return false;
     try {
@@ -104,14 +112,11 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
     }
   }
 
-  // 把图片作为 File 塞进新的 DataTransfer，再派发合成 paste 给焦点元素
-  function dispatchImagePaste(target, dataUrl) {
-    var blob = dataUrlToBlob(dataUrl);
-    if (!blob) return;
-    var file = new File([blob], 'clipboard-image.png', { type: blob.type || 'image/png' });
+  // 把若干 File 塞进同一个 DataTransfer，派发一次合成 paste 给焦点元素
+  function dispatchPasteWithFiles(target, files) {
     try {
       var dt = new DataTransfer();
-      dt.items.add(file);
+      for (var i = 0; i < files.length; i++) dt.items.add(files[i]);
       var ev;
       try {
         ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
@@ -129,6 +134,29 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
     } catch (_) {}
   }
 
+  // 把图片作为 File 塞进新的 DataTransfer，再派发合成 paste 给焦点元素
+  function dispatchImagePaste(target, dataUrl) {
+    var blob = dataUrlToBlob(dataUrl);
+    if (!blob) return;
+    var file = new File([blob], 'clipboard-image.png', { type: blob.type || 'image/png' });
+    dispatchPasteWithFiles(target, [file]);
+  }
+
+  // 把宿主回传的文件条目（data_url + 真实文件名/MIME）还原成 File 后一次性派发。
+  // 返回成功构造的数量，0 表示宿主没给到可用文件（调用方据此回退图片路径）。
+  function dispatchFilesPaste(target, entries) {
+    var files = [];
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      if (!entry || typeof entry.data_url !== 'string') continue;
+      var blob = dataUrlToBlob(entry.data_url);
+      if (!blob) continue;
+      files.push(new File([blob], entry.filename || 'clipboard-file', { type: entry.mime || blob.type || 'application/octet-stream' }));
+    }
+    if (files.length > 0) dispatchPasteWithFiles(target, files);
+    return files.length;
+  }
+
   // 捕获阶段先于 dsh 应用自身监听：空剪贴板时接管并走原生读取。
   // 仅当本窗口是子 frame（dsh iframe）时才接管；顶层壳层文档里没有聊天框，
   // 且 `window.parent` 指向自身，postMessage 不会命中宿主（见 handleClipboardImage），
@@ -143,8 +171,16 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
       if (!isPasteTarget(target)) return;
 
       event.preventDefault();
-      requestClipboardImage(target).then(function (dataUrl) {
-        if (dataUrl) dispatchImagePaste(target, dataUrl);
+      // 先问文件：从文件管理器复制文件时剪贴板只有 uri-list（对 WebKit 表现为
+      // 无图无文本），命中即贴文件（issue #1160）；复制截图时文件列表为空，
+      // 落回原有图片通路（issue #610），两条路互不干扰。
+      request(REQ_FILES_TYPE).then(function (fileData) {
+        var entries = (fileData && fileData.files) || [];
+        if (entries.length > 0 && dispatchFilesPaste(target, entries) > 0) return;
+        return request(REQ_TYPE).then(function (imageData) {
+          var dataUrl = imageData && imageData.data_url;
+          if (dataUrl) dispatchImagePaste(target, dataUrl);
+        });
       });
     }, true);
   }

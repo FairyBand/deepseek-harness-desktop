@@ -40,8 +40,24 @@ const APPEARANCE_HANDSHAKE_TIMEOUT = 4000
 /** 可见性兜底轮询间隔：主路径是窗口 focus/resize 事件，5s 足以覆盖任务栏切换等场景 */
 
 /**
+ * `read_clipboard_files` 的返回载荷（与 Rust `ClipboardFileEntry` / `ClipboardFileRejection` 对齐）。
+ * 前端只消费 `data_url / mime / filename` 重建 File，被拒条目用于降级提示（issue #1160）。
+ */
+interface ClipboardFileEntry {
+  data_url: string
+  mime: string
+  filename: string
+  size: number
+}
+
+interface ClipboardFileRejection {
+  filename: string
+  reason: string
+}
+
+/**
  * iframe → 宿主 的桥消息（宿主侧按 `type` 分发，不比对 `source`）。
- * 只列 iframe 自身关心的桥：通知 / 插件异常 / 剪贴板图片 / 插件 boot / 帧内日志
+ * 只列 iframe 自身关心的桥：通知 / 插件异常 / 剪贴板图片 / 剪贴板文件 / 插件 boot / 帧内日志
  * （导航桥的 `dsh://sidebar:collapsed` 由 `webview.tsx` 处理）。
  */
 interface IframeBridgeMessage {
@@ -405,6 +421,11 @@ export function Iframe({ iframeRef, srcOverride = null, borderTint = null }: Ifr
       case 'dsh://clipboard-image:read':
         handleClipboardImageRead(data)
         break
+      // 剪贴板文件回退：读系统剪贴板文件列表并把附件 data URL 回传
+      // （Linux/WebKitGTK 下 dsh iframe 的 paste 事件拿不到 text/uri-list 文件条目，issue #1160）
+      case 'dsh://clipboard-files:read':
+        handleClipboardFilesRead(data)
+        break
       // 插件 boot 状态：failed 携带官方失败页文本（如 web boot: 1 entry did not activate）
       case 'dsh://plugin-boot:ready':
         store.harness.markIframeBootReady()
@@ -543,6 +564,26 @@ export function Iframe({ iframeRef, srcOverride = null, borderTint = null }: Ifr
       .catch((error) => {
         console.error('[clipboard-image] read_clipboard_image failed:', error)
         reply(null)
+      })
+  }
+
+  function handleClipboardFilesRead(data: IframeBridgeMessage) {
+    if (!data.id)
+      return
+    const reqId = data.id
+    function reply(files: ClipboardFileEntry[], rejected: ClipboardFileRejection[]) {
+      post({ type: 'dsh://clipboard-files:reply', id: reqId, files, rejected })
+      // 宿主读取侧的降级（超限/不可读/目录）dsh 聊天框无从感知，由执行方提示（issue #1160）
+      if (rejected.length > 0) {
+        const names = rejected.slice(0, 3).map(entry => entry.filename).join(', ')
+        toast(t('messages.clipboard_files_partial', { total: rejected.length, names }), { variant: 'warning' })
+      }
+    }
+    void invoke<{ files?: ClipboardFileEntry[], rejected?: ClipboardFileRejection[] } | null>('read_clipboard_files')
+      .then(result => reply(result?.files ?? [], result?.rejected ?? []))
+      .catch((error) => {
+        console.error('[clipboard-files] read_clipboard_files failed:', error)
+        reply([], [])
       })
   }
 
