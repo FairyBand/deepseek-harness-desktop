@@ -21,6 +21,23 @@ describe('community plugin presets', () => {
     ])
   })
 
+  it('recommends Office Kit without preselecting it immediately before DSH Market', () => {
+    expect(presets.filter(plugin => plugin.id === 'dsh-office-kit')).toEqual([
+      {
+        id: 'dsh-office-kit',
+        spec: 'dsh-office-kit',
+        name: 'DSH Office Kit',
+        description: 'Office documents, PDF, presentations, and spreadsheets for DeepSeek Harness',
+        repo: 'https://github.com/hairyf/dsh-office-kit',
+        recommended: true,
+        checked: false,
+        version: 'latest',
+      },
+    ])
+    const ids = presets.map(plugin => plugin.id)
+    expect(ids[ids.indexOf('dsh-office-kit') + 1]).toBe('dshmarket')
+  })
+
   it('keeps DSH Market unselected and ordered after Billion Context', () => {
     const ids = presets.map(plugin => plugin.id)
     expect(ids.indexOf('dshmarket')).toBeGreaterThan(ids.indexOf('billion-context'))
