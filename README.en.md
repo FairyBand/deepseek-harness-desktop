@@ -78,6 +78,7 @@ Setup offers the following community plugins for installation on demand.
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — Per-session editor sidebar
 - [Billion Context](https://github.com/ranxianglei/billion-context) — Context compression and history restoration
+- [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — Office documents, PDF, presentations and spreadsheets
 - [DSH Market](https://github.com/dsh-market/dsh-market) — Community plugin market
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — Conversation rewind and workspace backups
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM channels and bot management
@@ -169,7 +170,6 @@ See the [English development guide](<./docs/DEVELOPMENT.md>) or [Chinese develop
 - [dsh-pdf-reader](https://github.com/SkanderBog/dsh-pdf-reader) - Page-by-page PDF reading, local OCR, citations, search and visual cropping by @SkanderBog
 - [dsh-context-manager](https://github.com/SkanderBog/dsh-context-manager) - Review context before applying, and choose per full-history group to keep, summarize or omit earlier content by @SkanderBog
 - [@ryuu-64/dsh-find-all](https://github.com/Ryuu-64/dsh-find-all) - Ctrl+F in the current conversation to find saved history by @Ryuu-64
-- [dsh-office-kit](https://github.com/hairyf/dsh-office-kit) - Office documents, PDF, presentations and spreadsheets by @hairyf
 
 ## Related
 

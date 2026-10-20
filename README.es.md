@@ -78,6 +78,7 @@ El asistente ofrece los siguientes plugins comunitarios para instalar a demanda.
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — Barra lateral del editor por sesión
 - [Billion Context](https://github.com/ranxianglei/billion-context) — Compresión de contexto y restauración del historial
+- [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — Documentos de Office, PDF, presentaciones y hojas de cálculo
 - [DSH Market](https://github.com/dsh-market/dsh-market) — Mercado de plugins comunitarios
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — Retroceso de conversación y backups del workspace
 - [DSH IM](https://github.com/xmanrui/dsh-im) — Canales IM y gestión de bots
@@ -169,7 +170,6 @@ Consultá la [guía en inglés](<./docs/DEVELOPMENT.md>) o la [guía en chino](<
 - [dsh-pdf-reader](https://github.com/SkanderBog/dsh-pdf-reader) - Lectura de PDF página por página, OCR local, citas, búsqueda y recorte visual por @SkanderBog
 - [dsh-context-manager](https://github.com/SkanderBog/dsh-context-manager) - Revisá el contexto antes de aplicarlo y elegí, por grupo de historial completo, qué conservar, resumir u omitir del contenido anterior por @SkanderBog
 - [@ryuu-64/dsh-find-all](https://github.com/Ryuu-64/dsh-find-all) - Ctrl+F en la conversación actual para buscar en el historial guardado por @Ryuu-64
-- [dsh-office-kit](https://github.com/hairyf/dsh-office-kit) - Documentos de Office, PDF, presentaciones y hojas de cálculo por @hairyf
 
 ## Relacionados
 

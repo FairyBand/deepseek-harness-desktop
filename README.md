@@ -77,6 +77,7 @@
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — 按会话隔离的右编辑器侧栏
 - [Billion Context](https://github.com/ranxianglei/billion-context) — 上下文压缩与历史恢复
+- [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — Office 文档、PDF、演示文稿与表格
 - [DSH Market](https://github.com/dsh-market/dsh-market) — 社区插件市场
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — 对话回退与工作区备份
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM 渠道与机器人管理
@@ -168,7 +169,6 @@ Windows 启动失败时会通过原生对话框显示具体错误。若出现 `S
 - [dsh-pdf-reader](https://github.com/SkanderBog/dsh-pdf-reader) — 按页 PDF 阅读、本地 OCR、引用、搜索和视觉裁剪 by @SkanderBog
 - [dsh-context-manager](https://github.com/SkanderBog/dsh-context-manager) — 应用前审阅上下文，并按完整历史组选择保留、总结或省略较早内容 by @SkanderBog
 - [@ryuu-64/dsh-find-all](https://github.com/Ryuu-64/dsh-find-all) — 在当前对话中按 Ctrl+F，查找已保存的历史内容 by @Ryuu-64
-- [dsh-office-kit](https://github.com/hairyf/dsh-office-kit) — Office 文档、PDF、演示文稿与表格 by @hairyf
 
 ## 相关项目
 
