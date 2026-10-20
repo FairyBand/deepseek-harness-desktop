@@ -48,8 +48,7 @@
 - 🪶 **Native desktop** — Tauri 2 + React 19 + HeroUI 3, embedding the local Harness UI.
 - 📱 **Remote connection** — Scan a QR code in the Android / iOS app to connect to your computer's DSH over LAN or a Cloudflare public tunnel.
 - 🔄 **Runtime management** — Install dependencies, select core versions, and access desktop/core updates.
-- 🔀 **Multi-backend support** — Use DSH / Codex / Claude in one interface, powered by their native tools.
-- 🧩 **Plugin management** — 13 built-in plugins, plus local-directory installs, built-in disabling, community plugin installation, upgrades, removal, and error details.
+- 🧩 **Plugin management** — 12 built-in plugins, plus local-directory installs, built-in disabling, community plugin installation, upgrades, removal, and error details.
 - 🗂️ **Profile configuration** — Separate plugin/settings configurations, with one-click profile data migration, backup, and cloning.
 - 💽 **Data directory** — Pick where data lives during installation (Windows); migrate or roll it back later in Settings on Windows, macOS, and Linux.
 - ⌨️ **CLI integration** — Managed `dsh` / `pnpm` commands via shims, not a global npm core installation.
@@ -63,7 +62,6 @@ First-party plugins distributed with desktop resources:
 - [DSH Tauri](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri) — Core plugin: desktop-to-Harness communication, version adapters, and plugin dependency management
 - [DSH Tauri UI](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-ui) — Desktop settings UI, native core components, themes, and palettes
 - [DSH Tauri Mobile UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-mobile-ui) — Touch layouts and mobile preferences
-- [DSH Tauri Kernel](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-kernel) — Local Codex / Claude integration and model selection
 - [DSH Tauri Worktree](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-worktree) — Session-level Git worktrees and checkout
 - [DSH Tauri Extension](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-extension) — Official plugin manager, plugin market, Skills, and MCP
 - [DSH Tauri Scheduler](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-scheduler) — Scheduled tasks and run history

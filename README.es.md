@@ -48,8 +48,7 @@
 - 🪶 **Escritorio nativo** — Tauri 2 + React 19 + HeroUI 3, con la interfaz local de Harness integrada.
 - 📱 **Conexión remota** — Escaneá un QR desde Android / iOS para conectarte al DSH de tu computadora por LAN o un túnel público de Cloudflare.
 - 🔄 **Gestión del runtime** — Instalá dependencias, elegí versiones del núcleo y accedé a actualizaciones del escritorio y del núcleo.
-- 🔀 **Soporte para distintos motores** — Usá DSH / Codex / Claude en una misma interfaz, con sus herramientas nativas.
-- 🧩 **Gestión de plugins** — 13 plugins integrados; instalación desde directorios locales, desactivación de integrados y gestión de plugins comunitarios.
+- 🧩 **Gestión de plugins** — 12 plugins integrados; instalación desde directorios locales, desactivación de integrados y gestión de plugins comunitarios.
 - 🗂️ **Configuración por perfiles** — Separá plugins y ajustes, con migración de los datos del perfil en un clic, backup y clonado.
 - 💽 **Directorio de datos** — Elegí la ubicación al instalar en Windows; migrá o revertí los datos desde Ajustes en Windows, macOS y Linux.
 - ⌨️ **Integración con la terminal** — Comandos `dsh` / `pnpm` mediante shims administrados, no una instalación global del núcleo por npm.
@@ -63,7 +62,6 @@ Plugins propios distribuidos con los recursos del escritorio:
 - [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — Plugin central: comunicación del escritorio con Harness, adaptadores de versión y gestión de dependencias de plugins
 - [DSH Tauri UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-ui) — Interfaz de ajustes del escritorio, componentes nativos del núcleo, temas y paletas
 - [DSH Tauri Mobile UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-mobile-ui) — Diseños táctiles y preferencias móviles
-- [DSH Tauri Kernel](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-kernel) — Integración local de Codex / Claude y selección de modelos
 - [DSH Tauri Worktree](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-worktree) — Worktrees Git por sesión y checkout
 - [DSH Tauri Extension](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-extension) — Gestor oficial de plugins, mercado de plugins, Skills y MCP
 - [DSH Tauri Scheduler](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-scheduler) — Tareas programadas e historial

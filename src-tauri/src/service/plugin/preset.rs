@@ -842,9 +842,18 @@ mod tests {
 
     #[test]
     fn deprecated_manifest_lists_the_renamed_bridge() {
-        // dsh-tauri-bridge 改名为 dsh-tauri-kernel：老档案里的 link: 依赖与 bundle 引用
-        // 只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入软件页面）。
+        // dsh-tauri-bridge 改名为 dsh-tauri-kernel（该功能已整体退役）：老档案里的
+        // link: 依赖与 bundle 引用只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入
+        // 软件页面）。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-bridge"));
+    }
+
+    #[test]
+    fn deprecated_manifest_lists_the_retired_kernel() {
+        // dsh-tauri-kernel 因原生内核不稳定退役，并从内置清单移除了条目：升级用户的
+        // link: 依赖与 bundle 引用只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入
+        // 软件页面）。
+        assert!(shipped_deprecated_ids().contains("dsh-tauri-kernel"));
     }
 
     #[test]

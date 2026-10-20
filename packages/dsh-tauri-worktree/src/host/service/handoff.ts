@@ -1,7 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentHandle, AgentSetupCommit } from '@deepseek-ai/dsh-agent'
-import type { Session } from '@deepseek-ai/dsh-session'
-import type { NativeSessionBridge } from 'dsh-tauri'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { CheckoutInfo, HostContext, OperationResult } from '../types'
 import { randomUUID } from 'node:crypto'
 import { getServerContext } from 'dsh-h3/utils'
@@ -132,60 +130,32 @@ async function createAgent(
   options: { parentSession?: string, requireEvents?: boolean } = {},
 ): Promise<{ handle: AgentHandle, seed: readonly unknown[] }> {
   const ctx = getServerContext<HostContext>(server)
-  const bridge: NativeSessionBridge | undefined = ctx.get?.('nativeSessionBridge')
-  if (bridge && (typeof bridge.create !== 'function' || typeof bridge.prepare !== 'function'))
-    throw new Error('BRIDGE_CORE_UNAVAILABLE: The native session fork capability is unavailable')
-  let inheritedSeed: readonly unknown[] = []
-  const create = (signal?: AbortSignal): Promise<AgentHandle> => {
-    signal?.throwIfAborted()
-    inheritedSeed = sessionEvents(sourceSession)
-    if (options.requireEvents && inheritedSeed.length === 0)
-      throw new Error(`源会话没有可继承的事件：${sourceSession.id}`)
-    if (!bridge) {
-      const projected = ctx.get?.('sessionProjections')?.stateOf?.(sourceSession, 'bridgeKernel')
-      const hasNativeRecord = inheritedSeed.some((value) => {
-        const event = value as { type?: unknown, ignorable?: unknown }
-        return event?.type === 'plugin:dsh-tauri-kernel/kernel' && event.ignorable === true
-      })
-      if (hasNativeRecord || projected?.binding || projected?.inheritedBinding || projected?.nativeSessionId || sourceSession.requestHeader?.()?.config?.provider === 'dsh-tauri-kernel' || sourceAgent?.options?.provider === 'dsh-tauri-kernel')
-        throw new Error('BRIDGE_CORE_UNAVAILABLE: Native session inheritance requires the native session fork capability')
-    }
-    const presets = ctx.get?.('agentPresets')
-    const parentPreset = sourceAgent
-      ? (presets?.composedPreset(sourceAgent.ctx) ?? sourceSession.header?.agentPreset)
-      : sourceSession.header?.agentPreset
-    return ctx.agents.create({
-      sessionId: targetSessionId,
-      seed: inheritedSeed,
-      ...(signal ? { signal } : {}),
-      meta: {
-        cwd,
-        parentSession: options.parentSession ?? sourceSession.id,
-        isSeeded: true,
-        ...(parentPreset ? { agentPreset: parentPreset } : {}),
-      },
-      inheritedEventCount: inheritedSeed.length,
-      agentOptions: sourceAgent?.options ?? {},
-      ...(bridge || (sourceAgent && presets && parentPreset)
-        ? {
-            setup: async (agentCtx: Context, agent: Agent): Promise<AgentSetupCommit | void> => {
-              if (sourceAgent && presets && parentPreset)
-                presets.composeFrom(agentCtx, sourceAgent.ctx)
-              if (!bridge)
-                return
-              const controller = new AbortController()
-              agentCtx.effect(() => () => controller.abort(new Error('BRIDGE_DISPOSED: The inherited agent setup was disposed')))
-              const scoped = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
-              scoped.throwIfAborted()
-              const commit = await bridge.prepare(sourceSession as Session, agent, scoped)
-              scoped.throwIfAborted()
-              return commit
-            },
-          }
-        : {}),
-    })
-  }
-  const handle = bridge ? await bridge.create(sourceSession as Session, create) : await create()
+  const inheritedSeed = sessionEvents(sourceSession)
+  if (options.requireEvents && inheritedSeed.length === 0)
+    throw new Error(`源会话没有可继承的事件：${sourceSession.id}`)
+  const presets = ctx.get?.('agentPresets')
+  const parentPreset = sourceAgent
+    ? (presets?.composedPreset(sourceAgent.ctx) ?? sourceSession.header?.agentPreset)
+    : sourceSession.header?.agentPreset
+  const handle = await ctx.agents.create({
+    sessionId: targetSessionId,
+    seed: inheritedSeed,
+    meta: {
+      cwd,
+      parentSession: options.parentSession ?? sourceSession.id,
+      isSeeded: true,
+      ...(parentPreset ? { agentPreset: parentPreset } : {}),
+    },
+    inheritedEventCount: inheritedSeed.length,
+    agentOptions: sourceAgent?.options ?? {},
+    ...(sourceAgent && presets && parentPreset
+      ? {
+          setup: async (agentCtx: Context): Promise<void> => {
+            presets.composeFrom(agentCtx, sourceAgent.ctx)
+          },
+        }
+      : {}),
+  })
   return { handle, seed: inheritedSeed }
 }
 

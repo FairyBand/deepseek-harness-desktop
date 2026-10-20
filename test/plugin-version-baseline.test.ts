@@ -23,7 +23,6 @@ const expectedPlugins = [
   'dsh-tauri-archive',
   'dsh-tauri-experimental',
   'dsh-tauri-extension',
-  'dsh-tauri-kernel',
   'dsh-tauri-mobile-ui',
   'dsh-tauri-model',
   'dsh-tauri-notification',
@@ -37,7 +36,7 @@ const expectedPlugins = [
 ]
 
 describe('运行插件最低内核声明', () => {
-  it('覆盖全部 15 个 dsh 插件而不包含聚合与构建包', () => {
+  it('覆盖全部 14 个 dsh 插件而不包含聚合与构建包', () => {
     expect(plugins.map(({ directory }) => directory).sort()).toEqual(expectedPlugins)
   })
 

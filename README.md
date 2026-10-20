@@ -47,8 +47,7 @@
 - 🪶 **原生桌面** — Tauri 2 + React 19 + Hero 3，内嵌本地 Harness 界面。
 - 📱 **远程连接** — Android / iOS 移动端扫码连接电脑上的 DSH，支持局域网与 Cloudflare 公网隧道。
 - 🔄 **运行时管理** — 安装依赖、选择内核版本，并提供桌面端与内核更新入口。
-- 🔀 **多内核支持** — 在同一界面畅用 DSH / Codex / Claude，发挥各自原生工具能力。
-- 🧩 **插件管理** — 13 个内置插件；支持本地路径安装、内置插件停用、社区插件安装、升级、卸载与错误查看。
+- 🧩 **插件管理** — 12 个内置插件；支持本地路径安装、内置插件停用、社区插件安装、升级、卸载与错误查看。
 - 🗂️ **档案配置** — 分别管理插件与设置，支持一键迁移档案数据、备份、克隆；
 - 💽 **数据目录** — 安装时（Windows）可选择数据存放位置；能在设置里整体迁移与回滚。
 - ⌨️ **命令行集成** — 通过托管 shim 提供 `dsh` / `pnpm` 命令行工具，不是全局 npm 内核安装。
@@ -62,7 +61,6 @@
 - [DSH Tauri](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri) — 核心插件，桌面端与 Harness 通信、版本适配器、插件依赖管理
 - [DSH Tauri UI](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri-ui) — 桌面设置界面、原生核心组件、主题与配色
 - [DSH Tauri Mobile UI](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri-mobile-ui) — 触屏布局与移动端偏好设置
-- [DSH Tauri Kernel](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-kernel) — 本机 Codex / Claude 接入与模型选择
 - [DSH Tauri Worktree](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri-worktree) — 会话级 Git 工作树与检出
 - [DSH Tauri Extension](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri-extension) — 官方插件管理、插件市场、Skills 与 MCP
 - [DSH Tauri Scheduler](https://dshtauri.mintlify.site/zh-CN/built-in-plugins/dsh-tauri-scheduler) — 定时任务与执行记录

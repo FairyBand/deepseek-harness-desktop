@@ -8,9 +8,8 @@
  * 并作为 dsh-tauri 宿主侧全部类型的统一出口。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentHandle, AgentSetupCommit } from '@deepseek-ai/dsh-agent'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
-import type { Session, SessionStore } from '@deepseek-ai/dsh-session'
+import type { SessionStore } from '@deepseek-ai/dsh-session'
 import type { IncomingMessage } from 'node:http'
 
 export type { Context } from '@deepseek-ai/cordis'
@@ -35,16 +34,6 @@ export type {
   ToolRuntime,
 } from '@deepseek-ai/dsh-tools'
 export type { WorkspaceId, WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
-export interface NativeSessionBridge {
-  create: (source: Session, create: (signal?: AbortSignal) => Promise<AgentHandle>) => Promise<AgentHandle>
-  prepare: (source: Session, agent: Agent, signal: AbortSignal) => Promise<AgentSetupCommit | void>
-}
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    nativeSessionBridge: NativeSessionBridge
-  }
-}
 
 export interface ConnectionGate {
   requestRejection: (request: IncomingMessage) => 401 | 403 | undefined
