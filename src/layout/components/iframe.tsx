@@ -573,10 +573,17 @@ export function Iframe({ iframeRef, srcOverride = null, borderTint = null }: Ifr
     const reqId = data.id
     function reply(files: ClipboardFileEntry[], rejected: ClipboardFileRejection[]) {
       post({ type: 'dsh://clipboard-files:reply', id: reqId, files, rejected })
-      // 宿主读取侧的降级（超限/不可读/目录）dsh 聊天框无从感知，由执行方提示（issue #1160）
+      // 宿主读取侧的降级（超限/不可读/目录）dsh 聊天框无从感知，由执行方提示（issue #1160）。
+      // 全部失败与部分失败分开提示：前者更可能是「路径不可读」而非超限，措辞不要误导。
       if (rejected.length > 0) {
         const names = rejected.slice(0, 3).map(entry => entry.filename).join(', ')
-        toast(t('messages.clipboard_files_partial', { total: rejected.length, names }), { variant: 'warning' })
+        toast(
+          t(files.length === 0 ? 'messages.clipboard_files_failed' : 'messages.clipboard_files_partial', {
+            total: rejected.length,
+            names,
+          }),
+          { variant: 'warning' },
+        )
       }
     }
     void invoke<{ files?: ClipboardFileEntry[], rejected?: ClipboardFileRejection[] } | null>('read_clipboard_files')

@@ -177,6 +177,9 @@ pub(crate) const PASTE_SHIM_JS: &str = r#"(function () {
       request(REQ_FILES_TYPE).then(function (fileData) {
         var entries = (fileData && fileData.files) || [];
         if (entries.length > 0 && dispatchFilesPaste(target, entries) > 0) return;
+        // 剪贴板里确实有文件、但全部被拒（超限/不可读/目录）：宿主已 toast 说明原因，
+        // 这里不再落回图片通路——那只会再报一次「读不到图片」，把真实原因盖掉。
+        if (fileData && fileData.rejected && fileData.rejected.length > 0) return;
         return request(REQ_TYPE).then(function (imageData) {
           var dataUrl = imageData && imageData.data_url;
           if (dataUrl) dispatchImagePaste(target, dataUrl);

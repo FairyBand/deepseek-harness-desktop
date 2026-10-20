@@ -212,6 +212,24 @@ fn clipboard_filename(path: &Path) -> String {
         .to_string()
 }
 
+/// 清洗 arboard 从 `text/uri-list` 解出的路径。
+///
+/// arboard 3.6.1 的 `paths_from_uri_list` 只按 `\n` 切分 URI 列表，而 deepin 文件
+/// 管理器（DFM）等把每条 URI 写成 `\r\n` 结尾，于是路径末尾残留 `\r`：
+/// `/path/工作簿1.xlsx\r`。该路径 `metadata()` 必然失败，文件会被拒成 `unreadable`
+/// 并静默失败（issue #1160 实测复现）。这里剥掉行尾 `\r`（以及可能的空白）后再用。
+fn sanitize_uri_path(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    let trimmed = raw.trim_end_matches(['\r', '\n']);
+    if trimmed.len() == raw.len() {
+        path
+    } else {
+        PathBuf::from(trimmed)
+    }
+}
+
 /// 读取单个剪贴板文件并编码为 data URL；不可粘时返回拒绝原因。
 ///
 /// `remaining` 是本次粘贴剩余的总量配额。**所有判定都在 `metadata` 阶段完成**
@@ -305,7 +323,25 @@ pub async fn read_clipboard_files() -> Result<ClipboardFilesResponse, String> {
             Err(e) => return Err(format!("CLIPBOARD_FILES_READ: {e}")),
         };
 
-        Ok(collect_clipboard_files(paths))
+        // 诊断：剪贴板里到底有没有文件、arboard 解出什么（CRLF 残留是 issue #1160 的
+        // 实测根因，见 sanitize_uri_path）。仅 info 级别，正常路径也会留一行。
+        log::info!("[clipboard-files] arboard returned {} path(s)", paths.len());
+        let paths: Vec<PathBuf> = paths.into_iter().map(sanitize_uri_path).collect();
+
+        let response = collect_clipboard_files(paths);
+        if !response.rejected.is_empty() {
+            log::warn!(
+                "[clipboard-files] {} file(s) rejected: {:?}",
+                response.rejected.len(),
+                response
+                    .rejected
+                    .iter()
+                    .map(|r| format!("{}={}", r.filename, r.reason))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        Ok(response)
     })
     .await
     .map_err(|e| format!("CLIPBOARD_FILES_TASK: {e}"))?
@@ -403,6 +439,40 @@ mod tests {
         let response = collect_clipboard_files(paths);
         assert_eq!(response.files.len(), MAX_CLIPBOARD_FILES);
         assert!(response.rejected.is_empty());
+    }
+
+    #[test]
+    fn sanitize_uri_path_strips_crlf_trailer() {
+        // deepin 文件管理器（DFM）写出的 uri-list 以 \r\n 结尾，arboard 只按 \n 切分，
+        // 路径尾部会带 \r；不清洗则 metadata() 必然失败（issue #1160 实测根因）
+        let raw = PathBuf::from("/media/x/工作簿1.xlsx\r");
+        assert_eq!(
+            sanitize_uri_path(raw),
+            PathBuf::from("/media/x/工作簿1.xlsx")
+        );
+    }
+
+    #[test]
+    fn sanitize_uri_path_leaves_clean_path_untouched() {
+        let clean = PathBuf::from("/media/x/工作簿1.xlsx");
+        assert_eq!(sanitize_uri_path(clean.clone()), clean);
+    }
+
+    #[test]
+    fn sanitize_uri_path_keeps_file_readable_after_cleanup() {
+        // 端到端语义：带 \r 的路径读不到，清洗后能正常读成附件
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.xlsx");
+        std::fs::write(&path, b"fake xlsx").unwrap();
+
+        let mut remaining = MAX_CLIPBOARD_TOTAL_BYTES;
+        let dirty = PathBuf::from(format!("{}\r", path.display()));
+        assert!(read_one_clipboard_file(&dirty, &mut remaining).is_err());
+
+        let mut remaining = MAX_CLIPBOARD_TOTAL_BYTES;
+        let entry = read_one_clipboard_file(&sanitize_uri_path(dirty), &mut remaining).unwrap();
+        assert_eq!(entry.filename, "report.xlsx");
+        assert_eq!(entry.mime, "application/octet-stream");
     }
 
     #[test]
