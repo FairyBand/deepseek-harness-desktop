@@ -1014,8 +1014,7 @@ async fn ensure_inner(
                 app_handle,
                 PREINSTALL_LOG_EVENT,
                 PreinstallLogPayload {
-                    line: "[harness] pnpm 无法回读新建的插件链接，改由应用直接建立链接…"
-                        .to_string(),
+                    line: "[harness] pnpm 未把插件链接落盘，改由应用直接建立链接…".to_string(),
                 },
             );
             match materialize_internal_links(app_handle, &profile, &need) {
@@ -1046,21 +1045,32 @@ async fn ensure_inner(
         return Err(format!("INTERNAL_PLUGIN_INSTALL_FAILED: {e}"));
     }
 
-    // pnpm 成功 ≠ 清单被登记：核心的 install 会按自己解析到的插件集重写
+    // pnpm 成功 ≠ 链接与清单落盘：核心的 install 会按自己解析到的插件集重写
     // `dependencies` 与 `dsh.profile.bundles`，解析不到的内置插件会被**剪掉**
-    // （本机 web profile 实测 13→2、11→0）。剪掉即不挂载：宿主插件的 apply 不运行，
-    // 索引恒 401、健康检查永远 `boot page returned 401`、最终 Process boot 超时。
-    // 收尾回读清单，缺项就用同一套物化路径写回（幂等）——否则 `bundle_ok` 每轮判
-    // 需重装、每轮又被打回原形。
-    if let Some(missing) = presets_missing_from_manifest(&profile, &need) {
+    // （本机 web profile 实测 13→2、11→0）；pnpm 也可能以 0 退出却没建出入口
+    // （目标目录对它不可见时只发警告，见 pnpm local-resolver）。两者都会让内置
+    // 插件不挂载：宿主插件的 apply 不运行，索引恒 401、健康检查永远 `boot page
+    // returned 401`、最终 Process boot 超时。收尾同时回读入口与清单，缺任一项
+    // 就用同一套物化路径写回（幂等）——否则 `bundle_ok` 每轮判需重装、每轮又被打回原形。
+    let missing_manifest = presets_missing_from_manifest(&profile, &need);
+    let unlinked = unlinked_internal_entries(&need);
+    if missing_manifest.is_some() || !unlinked.is_empty() {
         materialize_internal_links(app_handle, &profile, &need)
             .map_err(|error| format!("INTERNAL_PLUGIN_MANIFEST_RECOVER_FAILED: {error}"))?;
         log::warn!(
-            "INTERNAL_PLUGIN_MANIFEST_RECOVERED: re-registered internal plugins dropped by install: {missing:?}"
+            "INTERNAL_PLUGIN_MANIFEST_RECOVERED: repaired internal plugins after install (missing_manifest={missing_manifest:?}, unlinked={unlinked:?})"
         );
     }
 
     Ok(())
+}
+
+/// 安装后仍未真实落盘的内置插件入口（`node_modules/<name>/package.json` 不可读）。
+fn unlinked_internal_entries(need: &[(String, String, PathBuf)]) -> Vec<String> {
+    need.iter()
+        .filter(|(_, _, entry)| !internal_plugin_entry_is_ready(entry))
+        .map(|(_, name, _)| name.clone())
+        .collect()
 }
 
 /// 安装收尾校验：返回清单里缺登记的安装包名（`dependencies` 与
@@ -1127,6 +1137,9 @@ fn is_untraceable_link_readback_failure(error: &str) -> bool {
 /// 本轮待装的内置插件**——即离线自建链接能修、且修了不会掩盖别的失败的那一类。
 ///
 /// - `PREINSTALL_SILENT_FAIL`：pnpm 以 0 退出却没落盘产物（源码存在时自建链接必然成功）；
+/// - `cannot resolve profile bundle "<name>"`：pnpm 以 0 退出后，dsh 结算新依赖时
+///   解析不到 `node_modules/<name>`（pnpm 对「目标目录不可见 / 刚建好的重解析点」
+///   只发警告并 exit 0），**且**点名的包是本轮待装入口；
 /// - `PREINSTALL_FAILED`：诊断含 `node_modules` 与 `unknown error, open
 ///   '<profile>/node_modules/...'`（或退出码 `-4094`，libuv `UV_UNKNOWN`），**且**
 ///   诊断里的失败路径确实落在本轮待装入口之下。
@@ -1142,6 +1155,9 @@ fn is_link_materialization_failure(error: &str, need: &[(String, String, PathBuf
     {
         return true;
     }
+    if names_unresolved_internal_bundle(error, need) {
+        return true;
+    }
     if !looks_like_link_readback_failure(error) {
         return false;
     }
@@ -1151,6 +1167,20 @@ fn is_link_materialization_failure(error: &str, need: &[(String, String, PathBuf
             .any(|(_, _, entry)| path_lives_under(&path, entry)),
         None => false,
     }
+}
+
+/// 诊断是否点名了「本轮待装内置插件解析不到」。`dsh` 的措辞是
+/// `cannot resolve profile bundle "<package>"`，包名即 `dsh.profile.bundles` 里的
+/// 安装名；只比对安装名——预设 id 与安装名不同（scoped 包）时用 id 比对，会把用户
+/// 同名的普通依赖误认成内置插件。
+fn names_unresolved_internal_bundle(error: &str, need: &[(String, String, PathBuf)]) -> bool {
+    if !error.contains("cannot resolve profile bundle") {
+        return false;
+    }
+    need.iter().any(|(_, name, _)| {
+        error.contains(&format!("cannot resolve profile bundle \"{name}\""))
+            || error.contains(&format!("cannot resolve profile bundle '{name}'"))
+    })
 }
 
 /// 取 pnpm 诊断里 `unknown error, open '<path>'` 的路径（统一分隔符、去尾斜杠）。
@@ -1641,6 +1671,78 @@ mod tests {
              created for [dsh-tauri]. Expected package manifests: [...]",
             &need_entries(&["dsh-tauri"])
         ));
+    }
+
+    /// issue #1156：pnpm 以 0 退出（或 pnpm 没落盘却让 dsh 继续结算）时，dsh 的
+    /// `cannot resolve profile bundle` 点名了本轮待装入口，同样必须走离线自建链接兜底。
+    #[test]
+    fn link_materialization_failure_detects_unresolved_internal_bundle() {
+        let error = "PREINSTALL_FAILED: dsh plugin exited with code 1: throw new Error(`${binName}: \
+                     cannot resolve profile bundle ${JSON.stringify(packageName)} ...`);\n\
+                     Error: dsh: cannot resolve profile bundle \"dsh-tauri\" from the dsh \
+                     installation or C:\\Users\\A1\\.dsh\\profiles\\web; run 'dsh plugin --profile \
+                     web install' if its dependency is not installed";
+        assert!(is_link_materialization_failure(
+            error,
+            &need_entries(&["dsh-tauri", "dsh-tauri-ui"])
+        ));
+        // scoped 包：诊断里出现的是安装名
+        assert!(is_link_materialization_failure(
+            "cannot resolve profile bundle '@scope/dsh-tauri' from the dsh installation",
+            &need_entries(&["@scope/dsh-tauri"])
+        ));
+        // 预设 id 与安装名不同时只认安装名：同名 id 出现在错误里不能归因
+        let scoped = vec![(
+            "dsh-tauri".to_string(),
+            "@scope/dsh-tauri".to_string(),
+            PathBuf::from("node_modules/@scope/dsh-tauri"),
+        )];
+        assert!(!is_link_materialization_failure(
+            "cannot resolve profile bundle \"dsh-tauri\" from the dsh installation",
+            &scoped
+        ));
+        assert!(is_link_materialization_failure(
+            "cannot resolve profile bundle \"@scope/dsh-tauri\" from the dsh installation",
+            &scoped
+        ));
+        // 点名的不是本轮待装入口（用户自己的依赖 / 其它包）：绝不兜底
+        assert!(!is_link_materialization_failure(
+            error,
+            &need_entries(&["dsh-tauri-ui"])
+        ));
+        assert!(!is_link_materialization_failure(
+            "cannot resolve profile bundle \"someone-else\" from the dsh installation",
+            &need_entries(&["dsh-tauri"])
+        ));
+    }
+
+    /// pnpm 以 0 退出但入口没落盘时，收尾必须识别出来并重新物化（issue #1156）。
+    #[test]
+    fn post_install_repair_detects_unlinked_internal_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path();
+        let need: Vec<(String, String, PathBuf)> = ["dsh-tauri"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    name.to_string(),
+                    profile.join("node_modules").join(name),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            unlinked_internal_entries(&need),
+            vec!["dsh-tauri".to_string()]
+        );
+        std::fs::create_dir_all(profile.join("node_modules").join("dsh-tauri")).unwrap();
+        std::fs::write(
+            profile.join("node_modules").join("dsh-tauri").join("package.json"),
+            r#"{"name":"dsh-tauri"}"#,
+        )
+        .unwrap();
+        assert!(unlinked_internal_entries(&need).is_empty());
     }
 
     /// 同一签名也可能来自用户自己的 `link:` 依赖（`pnpm add` 会一并解析项目依赖）：
