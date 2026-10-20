@@ -68,13 +68,15 @@ export function McpEditorForm(props: McpEditorFormProps): ReactElement {
                 />
               </Field>
               <Field as="div" label={t('transport')}>
-                <Select
-                  disabled={editor.id !== ''}
-                  label={t('transport')}
-                  options={transportOptions}
-                  value={editor.transport}
-                  onChange={next => onEditorChange({ transport: next as McpEditorState['transport'] })}
-                />
+                <div>
+                  <Select
+                    disabled={editor.id !== ''}
+                    label={t('transport')}
+                    options={transportOptions}
+                    value={editor.transport}
+                    onChange={next => onEditorChange({ transport: next as McpEditorState['transport'] })}
+                  />
+                </div>
               </Field>
               {editor.transport === 'stdio'
                 ? (
