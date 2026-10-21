@@ -1,9 +1,21 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { server } from '../server'
 import { clearTurnEndFacts, turnEndFact } from '../service/turn-end'
 import { handleSessionEvent } from './session-event'
 
 describe('handleSessionEvent', () => {
+  let disposeServer: () => void
   beforeEach(() => {
+    clearTurnEndFacts()
+    disposeServer = server({
+      workspaceRegistry: { archivedSessionIds: [] },
+      webServer: { register: () => () => {} },
+    } as unknown as Context)
+  })
+
+  afterEach(() => {
+    disposeServer()
     clearTurnEndFacts()
   })
 

@@ -67,6 +67,11 @@ interface FakeHost {
   listenerCount: (name: string) => number
   emitEvent: (session: unknown, event: unknown) => void
   emitDisposed: (session: unknown) => void
+  workspaceRegistry: { archivedSessionIds: readonly string[] }
+  emitStop: (sessionId: string) => void
+  emitStatus: (session: unknown, status: string) => void
+  /** 发一次存储域变更广播（归档集合变化的来源）。 */
+  emitDomainChange: () => void
   /** 发一帧 agent-scoped 活体助手流帧（`agent/assistant-stream` 的 chunk 帧）。 */
   emitAssistantStream: (session: unknown, chunk: unknown) => void
   /** 启动真实 http server 并接入一个 SSE 消费者。 */
@@ -117,7 +122,9 @@ function createHost(options: FakeHostOptions = {}): FakeHost {
   let lookups = 0
   let nodeHandler: ((request: IncomingMessage, response: ServerResponse) => void) | undefined
 
+  const workspaceRegistry = { archivedSessionIds: [] as readonly string[] }
   const ctx = {
+    workspaceRegistry,
     get: (name: string) => {
       if (name === 'sessionTitle' && options.titleService !== false) {
         return {
@@ -162,6 +169,19 @@ function createHost(options: FakeHostOptions = {}): FakeHost {
   const host: FakeHost = {
     ctx,
     routes,
+    workspaceRegistry,
+    emitStop: (sessionId) => {
+      for (const handler of listeners.get('workspace/session-stop') ?? [])
+        handler({ sessionId })
+    },
+    emitStatus: (session, status) => {
+      for (const handler of listeners.get('agent/status') ?? [])
+        handler({ agent: { session }, status })
+    },
+    emitDomainChange: () => {
+      for (const handler of listeners.get('domain/changed') ?? [])
+        handler()
+    },
     titleLookups: () => lookups,
     listenerCount: name => listeners.get(name)?.size ?? 0,
     emitEvent: (session, event) => {
@@ -261,6 +281,134 @@ afterEach(async () => {
 })
 
 describe('pet host apply()', () => {
+  it.each(['stop', 'completed', 'error', 'idle', 'stream'])('归档后 %s 先到也只移除气泡，旧事件不得重建且取消归档后正常完成', async (first) => {
+    const host = createHost()
+    apply(host.ctx)
+    const connection = await host.connect()
+    const session = { id: 'archived' }
+    host.emitEvent(session, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    host.emitAssistantStream(session, { type: 'reasoning-delta', text: '归档前思考' })
+    await connection.waitFor(
+      () => connection.payloads.find(frame => (frame.payload.liveActivity as { text?: string } | undefined)?.text === '归档前思考'),
+      '归档前活体帧',
+    )
+    const before = connection.payloads.length
+    host.workspaceRegistry.archivedSessionIds = [session.id]
+    const end = (kind: string) => host.emitEvent(session, {
+      type: 'turn/end',
+      seq: 1,
+      time: 1,
+      data: { reason: { kind, error: { message: '过期错误' } } },
+    })
+    if (first === 'stop')
+      host.emitStop(session.id)
+    else if (first === 'idle')
+      host.emitStatus(session, 'idle')
+    else if (first === 'stream')
+      host.emitAssistantStream(session, { type: 'reasoning-delta', text: '过期思考' })
+    else
+      end(first)
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.action === 'remove' && frame.payload.id === session.id),
+      '归档立即移除',
+    )
+    host.emitStop(session.id)
+    end('completed')
+    end('error')
+    host.emitStatus(session, 'idle')
+    host.emitAssistantStream(session, { type: 'reasoning-delta', text: '残留思考' })
+    host.emitAssistantStream(session, { type: 'text-delta', text: '残留正文' })
+    host.emitEvent(session, { type: 'turn/start', seq: 2, time: 2, data: {} })
+    host.emitEvent({ id: 'barrier' }, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.payload.id === 'barrier' && frame.payload.workStatus === 'thinking'),
+      '旧事件处理完毕',
+    )
+    expect(connection.payloads.slice(before).filter(frame => frame.payload.id === session.id)).toEqual([
+      { action: 'remove', payload: { id: session.id } },
+    ])
+    expect(host.titleLookups()).toBe(2)
+
+    host.workspaceRegistry.archivedSessionIds = []
+    host.emitEvent(session, { type: 'turn/start', seq: 3, time: 3, data: {} })
+    end('completed')
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.payload.id === session.id && frame.payload.workStatus === 'success'),
+      '取消归档后正常成功',
+    )
+    const restored = connection.payloads.slice(before).filter(frame => frame.payload.id === session.id)
+    expect(restored.map(frame => [frame.action, frame.payload.workStatus])).toEqual([
+      ['remove', undefined],
+      ['create', undefined],
+      ['update', 'thinking'],
+      ['update', 'success'],
+    ])
+    expect(restored.at(-1)?.payload).toMatchObject({ running: false })
+    expect(restored.at(-1)?.payload.message).toBeUndefined()
+    expect(restored.at(-1)?.payload.liveActivity).toBeUndefined()
+    expect(host.titleLookups()).toBe(3)
+  })
+
+  it('接入前已归档的会话在事件和活体流入口均不建档或折叠标题', async () => {
+    const host = createHost()
+    host.workspaceRegistry.archivedSessionIds = ['archived']
+    apply(host.ctx)
+    const connection = await host.connect()
+    host.emitEvent({ id: 'archived' }, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    host.emitAssistantStream({ id: 'archived' }, { type: 'reasoning-delta', text: '旧帧' })
+    host.emitStatus({ id: 'archived' }, 'idle')
+    host.emitStop('archived')
+    host.emitEvent({ id: 'barrier' }, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.payload.id === 'barrier' && frame.payload.workStatus === 'thinking'),
+      '归档事件处理完毕',
+    )
+    expect(connection.payloads.map(frame => frame.payload.id)).toEqual(['barrier', 'barrier'])
+    expect(host.titleLookups()).toBe(1)
+  })
+
+  it('归档广播到达即移除气泡，不需要该会话再产生事件', async () => {
+    const host = createHost()
+    apply(host.ctx)
+    const connection = await host.connect()
+    const session = { id: 'archived' }
+    host.emitEvent(session, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    host.emitEvent(session, { type: 'turn/end', seq: 1, time: 1, data: { reason: { kind: 'completed' } } })
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.payload.id === session.id && frame.payload.workStatus === 'success'),
+      '归档前成功态',
+    )
+
+    host.workspaceRegistry.archivedSessionIds = [session.id]
+    host.emitDomainChange()
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.action === 'remove' && frame.payload.id === session.id),
+      '归档广播后移除',
+    )
+  })
+
+  it.each(['completed', 'error'])('未归档会话保留 %s 终态，不被 idle 清除', async (kind) => {
+    const host = createHost()
+    apply(host.ctx)
+    const connection = await host.connect()
+    const session = { id: 'normal' }
+    host.emitEvent(session, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    host.emitEvent(session, { type: 'turn/end', seq: 1, time: 1, data: { reason: { kind, error: { message: '真实错误' } } } })
+    host.emitStatus(session, 'idle')
+    host.emitEvent({ id: 'barrier' }, { type: 'turn/start', seq: 0, time: 0, data: {} })
+    await connection.waitFor(
+      () => connection.payloads.find(frame => frame.payload.id === 'barrier' && frame.payload.workStatus === 'thinking'),
+      '普通终态处理完毕',
+    )
+    const frames = connection.payloads.filter(frame => frame.payload.id === session.id)
+    expect(frames.map(frame => [frame.action, frame.payload.workStatus])).toEqual([
+      ['create', undefined],
+      ['update', 'thinking'],
+      ['update', kind === 'completed' ? 'success' : 'error'],
+    ])
+    expect(frames.at(-1)?.payload.lastAgentError).toBe(kind === 'error' ? '真实错误' : undefined)
+  })
+
   it('会话流只声明 GET，POST 与 OPTIONS 返回原生 405 和 GET/HEAD 方法集合', async () => {
     const host = createHost()
     apply(host.ctx)
@@ -298,6 +446,9 @@ describe('pet host apply()', () => {
     apply(host.ctx)
     expect(host.listenerCount('session/event')).toBe(0)
     expect(host.listenerCount('session/disposed')).toBe(0)
+    expect(host.listenerCount('workspace/session-stop')).toBe(0)
+    expect(host.listenerCount('agent/status')).toBe(0)
+    expect(host.listenerCount('agent/assistant-stream')).toBe(0)
 
     host.emitEvent({ id: 's1' }, chunk(0))
     expect(host.titleLookups()).toBe(0)
@@ -308,6 +459,8 @@ describe('pet host apply()', () => {
     apply(host.ctx)
     await host.connect()
     expect(host.listenerCount('session/event')).toBe(1)
+    expect(host.listenerCount('workspace/session-stop')).toBe(1)
+    expect(host.listenerCount('agent/status')).toBe(1)
 
     const session = { id: 's1' }
     for (let seq = 0; seq < 500; seq++)
@@ -335,6 +488,8 @@ describe('pet host apply()', () => {
     await waitUntil(() => host.listenerCount('session/event') === 0, '断开后注销监听')
     expect(host.listenerCount('session/disposed')).toBe(0)
     expect(host.listenerCount('agent/assistant-stream')).toBe(0)
+    expect(host.listenerCount('workspace/session-stop')).toBe(0)
+    expect(host.listenerCount('agent/status')).toBe(0)
 
     // 断开期间的会话事件不再产生任何工作（也不读标题）。
     host.emitEvent(session, chunk(1))

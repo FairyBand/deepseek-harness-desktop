@@ -8,6 +8,7 @@ export const inject = ['connection', 'webServer', 'workspaceRegistry']
 export { apply } from './host/apply'
 export * from './host/config/constants'
 export * from './host/service'
+export { watchArchive } from './host/service/archive'
 export * from './host/service/request'
 export * from './host/types/harness'
 export * from './host/utils/atomic'

@@ -17,7 +17,9 @@ afterEach(() => {
 
 it('serves turn-end facts and preserves HEAD, allowed methods and disposal', async () => {
   const registered = new Map<string, WebRoute>()
+  const workspaceRegistry = { archivedSessionIds: [] as string[] }
   const unmount = server({
+    workspaceRegistry,
     webServer: {
       register(route: WebRoute) {
         registered.set(route.path, route)
@@ -43,6 +45,12 @@ it('serves turn-end facts and preserves HEAD, allowed methods and disposal', asy
     expect(await (await fetch(base)).json()).toEqual({})
     handleSessionEvent({ id: 'session' }, { type: 'turn/end', data: { turn: 3, reason: { kind: 'aborted' } } })
     expect(await (await fetch(`${base}?sessionId=session`)).json()).toEqual({ reason: 'aborted', turn: 3 })
+    handleSessionEvent({ id: 'session' }, { type: 'turn/end', data: { turn: 4, reason: { kind: 'completed' } } })
+    workspaceRegistry.archivedSessionIds = ['session', 'without-fact']
+    expect(await (await fetch(`${base}?sessionId=session`)).json()).toEqual({ reason: 'archived', turn: 4 })
+    expect(await (await fetch(`${base}?sessionId=without-fact`)).json()).toEqual({ reason: 'archived', turn: -1 })
+    workspaceRegistry.archivedSessionIds = []
+    expect(await (await fetch(`${base}?sessionId=session`)).json()).toEqual({ reason: 'completed', turn: 4 })
     const head = await fetch(base, { method: 'HEAD' })
     expect(head.status).toBe(200)
     expect(await head.text()).toBe('')

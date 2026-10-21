@@ -1,4 +1,5 @@
-import type { ClientContext } from 'dsh-tauri/client'
+import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { AdapterListProjection, ClientContext } from 'dsh-tauri/client'
 import type { FocusGateInput } from '../service/decision'
 import type { NativeNotificationAction, NotificationKind, PendingInteractionFace, SessionsFace, UiSessionFace } from '../types'
 import { defineRegister } from 'dsh-tauri/client'
@@ -39,12 +40,19 @@ interface SessionObservation {
  * 服务缺席时降级而不是报错。
  */
 export const notifyFeature = defineRegister<ClientContext>((controller, ctx, adapter) => {
+  // 归档集合缺席时只丢掉「归档抑制」，通知照常发：新版宿主才有这份快照。
+  const workspaceSource = adapter.has('workspaces.list') ? adapter.workspaces.list as AdapterListProjection<WorkspaceSnapshot> : undefined
+  const isArchived = (sessionId: string): boolean => {
+    const archivedSessionIds: readonly string[] = workspaceSource?.getSnapshot().archivedSessionIds ?? []
+    return archivedSessionIds.includes(sessionId)
+  }
   const sound = createSoundPlayer()
   controller.add(sound.dispose)
   // 内置提示音是壳层 `public/` 下的资源，插件在 iframe 里取不到同源文件：开局先索要一份，
   // 免得第一次通知落到合成音兜底上。
   requestBuiltinSounds()
 
+  const observationTokens = new Map<string, object>()
   const seenRunning = new Map<string, boolean | undefined>()
   const seenPending = new Map<string, string | undefined>()
   const timers = new Map<string, () => void>()
@@ -86,6 +94,8 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
   }
 
   const notify = (sessionId: string, kind: NotificationKind, title: string, body: string, requireInteraction: boolean, actions?: NativeNotificationAction[], onAction?: (action: string, inputValue: string | null) => void): void => {
+    if (controller.isDisposed() || isArchived(sessionId))
+      return
     const settings = notificationSettings.$state
     sound.play(settings.sound, settings.customSound)
     sequence += 1
@@ -255,7 +265,10 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
   const reconcileTurn = (sessionId: string, finished: boolean): void => {
     if (!finished)
       return
+    const token = observationTokens.get(sessionId)
     settle(`${sessionId}:turn`, () => {
+      if (controller.isDisposed() || isArchived(sessionId) || observationTokens.get(sessionId) !== token)
+        return
       const status = readUiSession()?.sessionStatus.getSnapshot().get(sessionId)
       const summary = readSessions()?.list.getSnapshot().byId[sessionId]
       if (status ? status.running === true : summary?.running === true)
@@ -267,6 +280,8 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
       // 的 `turn/end` 里，所以弹之前问一次宿主；是中断就什么都不做（用户自己掐断的，不需要提醒）。
       void (async () => {
         if (await turnEndedByUser(sessionId))
+          return
+        if (controller.isDisposed() || isArchived(sessionId) || observationTokens.get(sessionId) !== token)
           return
         // 问宿主是异步的，等待期间会话可能又跑起来了：再确认一次，别给正在干活的会话弹「已完成」。
         const currentStatus = readUiSession()?.sessionStatus.getSnapshot().get(sessionId)
@@ -289,8 +304,10 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
       seenRunning.set(sessionId, observed.running)
       seenPending.set(sessionId, pendingKey)
       // 首次观察只建立基线：插件加载前就存在的完成态与待处理交互不该补弹通知。
-      if (!known)
+      if (!known) {
+        observationTokens.set(sessionId, {})
         continue
+      }
       if (observed.pending && pendingKey !== previousPending)
         reconcilePending(sessionId, observed.pending, true)
       reconcileTurn(sessionId, previousRunning === true && observed.running !== true)
@@ -298,6 +315,7 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
     for (const sessionId of [...seenRunning.keys()]) {
       if (entries.has(sessionId))
         continue
+      observationTokens.delete(sessionId)
       seenRunning.delete(sessionId)
       seenPending.delete(sessionId)
       syncQuestionWizard(sessionId, undefined)
@@ -317,7 +335,7 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
     for (const sessionId of list.ids) {
       const summary = list.byId[sessionId]
       // 子代理会话由父会话驱动，与桌宠（use-bubble-tracker）一致：不进观察集，也就不发通知。
-      if (summary?.origin === 'subagent')
+      if (summary?.origin === 'subagent' || isArchived(sessionId))
         continue
       const status = statuses?.get(sessionId)
       entries.set(sessionId, {
@@ -329,6 +347,8 @@ export const notifyFeature = defineRegister<ClientContext>((controller, ctx, ada
   }
 
   // 会话列表是常驻服务：用它驱动观察，顺带拿到标题与当前会话。
+  if (workspaceSource)
+    controller.add(workspaceSource.subscribe(observe))
   const listSource = readSessions()?.list
   if (listSource) {
     controller.add(listSource.subscribe(observe))

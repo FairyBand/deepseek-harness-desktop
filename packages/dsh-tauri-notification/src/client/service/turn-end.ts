@@ -6,7 +6,7 @@ import { getTurnEnd } from '../apis'
  * 内核把手动中断标成 `aborted`（`completed` 才是正常跑完）；`interrupted` 是同类语义的
  * 历史别名，一并认掉：两者都不该弹「回合完成」通知。
  */
-const USER_INTERRUPT_REASONS: ReadonlySet<string> = new Set(['aborted', 'interrupted'])
+const USER_INTERRUPT_REASONS: ReadonlySet<string> = new Set(['aborted', 'interrupted', 'archived'])
 
 /**
  * 这个会话最近一次回合是不是被用户手动中断的。

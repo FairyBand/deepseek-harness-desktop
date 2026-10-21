@@ -212,6 +212,23 @@ describe('createBubbleTracker', () => {
     ])
   })
 
+  it.each([
+    { status: 'running' },
+    { workStatus: 'thinking' },
+    { workStatus: 'working' },
+    { workStatus: 'waiting' },
+  ])('silently removes an active bubble without a terminal notification: %j', (activity) => {
+    const { bubble, calls } = createFakeBubble()
+    const tracker = createBubbleTracker(bubble)
+    tracker.apply({ id: 's1', title: '会话一', ...activity }, 'create')
+    calls.length = 0
+
+    tracker.apply({ id: 's1' }, 'remove')
+    tracker.flush()
+
+    expect(calls).toEqual([{ type: 'close', id: 's1' }])
+  })
+
   it('shows a terminal motion only once until the session leaves it', () => {
     const { bubble, calls } = createFakeBubble()
     const tracker = createBubbleTracker(bubble)
