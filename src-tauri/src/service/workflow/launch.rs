@@ -768,13 +768,6 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = crate::service::plugin::ensure_profile_npmrc(&app_handle) {
         log::warn!("ensure profile .npmrc failed: {e}");
     }
-    // 弃用插件自动卸载：`manifest.jsonc` 的 `plugins.depercated` 登记的社区插件若已安装，启动时
-    // 自动移除（避免残留插件继续在 profile 里加载、甚至导致启动失败）。最佳努力：
-    // 失败只告警，不阻断启动。
-    if let Err(e) = crate::service::plugin::uninstall_deprecated_plugins(&app_handle).await {
-        log::warn!("uninstall deprecated plugins failed: {e}");
-    }
-    mark_phase("deprecated_plugins", &mut phase_started);
     // 内置插件自愈：随包分发的内置插件（dsh-tauri 等）必须在服务进程加载插件
     // 前就绪——核对「已安装 + 安装路径指向当前捆绑目录」，未安装、路径不正确
     // 或用户卸载后重启，一律强制重装（见 service::plugin::internal）。普通

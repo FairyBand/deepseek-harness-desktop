@@ -80,7 +80,7 @@ function expectNoCoreOrProfileSwitch() {
 function expectManagedWarning() {
   expect(mocks.toast).toHaveBeenCalledWith('Switch to a managed core before updating', {
     variant: 'warning',
-    description: 'The package manager chooses the target version. Switch to a downloaded managed core first, update, then switch back manually and choose a matching profile.',
+    description: 'The package manager chooses the target version. Switch to a downloaded managed core first, update, then switch back manually.',
     timeout: 10_000,
   })
 }
@@ -141,7 +141,7 @@ describe('本地核心更新档案安全', () => {
 
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('Local core updated: 0.2.2-rc.1', {
       variant: 'success',
-      description: 'The desktop will keep using the current managed core. Switch back to the local core manually and choose a matching profile when prompted.',
+      description: 'The desktop will keep using the current managed core. Switch back to the local core manually.',
       timeout: 10_000,
     }))
     expect(mocks.invoke).toHaveBeenCalledWith('update_local_core')
@@ -159,7 +159,7 @@ describe('本地核心更新档案安全', () => {
 
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('Local core updated: 0.2.2-rc.1', {
       variant: 'success',
-      description: 'The desktop will keep using the current managed core. Switch back to the local core manually and choose a matching profile when prompted.',
+      description: 'The desktop will keep using the current managed core. Switch back to the local core manually.',
       timeout: 10_000,
     }))
     expect(mocks.invoke).toHaveBeenCalledWith('update_local_core')
@@ -207,14 +207,15 @@ describe('本地核心更新档案安全', () => {
     expect((screen.getByRole('button', { name: 'Update Local Core' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('更新后手动切回本地新版本仍先询问配套档案，取消不切核心', async () => {
+  it('更新后手动切回只显示普通确认，取消不切核心', async () => {
     renderCore()
     fireEvent.click(await screen.findByRole('button', { name: 'Update Local Core' }))
     const updatedLocal = await screen.findByRole('checkbox', { name: '0.2.2-rc.1' })
     fireEvent.click(updatedLocal)
 
     const dialog = await screen.findByRole('alertdialog')
-    expect((within(dialog).getByRole('textbox', { name: 'Profile name' }) as HTMLInputElement).value).toBe('Core-0.2.2')
+    expect(within(dialog).queryByRole('textbox')).toBeNull()
+    expect(within(dialog).getByRole('heading').textContent).toBe('Warning')
     expectNoCoreOrProfileSwitch()
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))

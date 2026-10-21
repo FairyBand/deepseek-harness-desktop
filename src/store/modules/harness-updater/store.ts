@@ -31,14 +31,7 @@ export const harnessUpdater = defineStore({
       }
     },
 
-    /**
-     * 手动更新：重新下载安装新版并重启服务。
-     *
-     * 返回是否真的发生了安装（新版本已落盘）：false 表示未发生安装（已是最新/无法校验）
-     * 或安装前就失败——调用方据此回滚为本次更新预先切换的版本档案（旧核心不能配新档案）。
-     * 安装已落盘但随后的启动失败仍返回 true：核心已经是新版，把档案切回旧版本只会造出
-     * 反向的不配套（新核心配旧档案），启动失败另有 `harness.fail` 的失败态呈现。
-     */
+    /** 手动更新并重启服务，返回新版本是否已落盘。 */
     async handleUpdate(): Promise<boolean> {
       if (this.updating)
         return false
@@ -77,8 +70,6 @@ export const harnessUpdater = defineStore({
       catch (err) {
         console.error('[Harness] update failed:', err)
         harness.fail(String(err))
-        // 已落盘的安装不能报成「没切换」：调用方会据此把档案切回旧版本，反而造出
-        // 「新核心 + 旧档案」的不配套状态。
         return installed
       }
       finally {

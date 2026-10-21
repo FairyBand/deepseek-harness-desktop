@@ -10,7 +10,6 @@ import { queryKeys } from '@/config/query-keys'
 import { useListen } from '@/hooks/use-listen'
 import { useThemeAdaptive } from '@/hooks/use-theme-adaptive'
 import { useWakelockRelease } from '@/hooks/use-wakelock-release'
-import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { toast } from '@/utils/toast'
 import { store } from '../store'
 import { Recovery } from '../ui/plugin/recovery'
@@ -41,7 +40,6 @@ export function App() {
   const { status } = useStore(store.harness)
   const { hydrated: settingReady, auto_update: autoUpdate } = useStore(store.setting)
   const { updateInfo, updating } = useStore(store.harnessUpdater)
-  const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // issue #469：本应用没有屏幕常亮的正当需求（常驻播放的 <video> 会让系统无法息屏），
   // 唤醒锁一旦生效就立刻释放。
@@ -133,26 +131,12 @@ export function App() {
   useWatch([updateInfo, updating], () => {
     if (!updateInfo || updating)
       return
-    store.harnessUpdater.showToast(() => handleUpdate())
+    store.harnessUpdater.showToast(() => store.harnessUpdater.handleUpdate())
   }, { immediate: true })
-
-  async function handleUpdate() {
-    const info = store.harnessUpdater.updateInfo
-    if (!info)
-      return
-    const guard = await guardCoreUpgrade(info.tag)
-    if (!guard)
-      return
-    if (!(await store.harnessUpdater.handleUpdate()))
-      await guard.rollback?.()
-  }
 
   return (
     <div className="flex h-screen w-screen" data-testid="dsh-shell-root">
       <Webview />
-      <If cond={status === 'ready'}>
-        {coreProfileSwitchHolder}
-      </If>
       {/* 运行期插件异常：应用仍在运行，弹醒目对话框（启动崩溃走 webview 的全屏恢复页） */}
       <If cond={status === 'ready'}>
         <Recovery />

@@ -20,25 +20,6 @@ export function compareVersions(a: string, b: string): number {
   return semver.compare(pa, pb)
 }
 
-export function coreProfileName(version: string): string {
-  const parsed = semver.parse(normalizeVersion(version))
-  return parsed ? `Core-${parsed.major}.${parsed.minor}.${parsed.patch}` : ''
-}
-
-export function isCoreUpgrade(from: string, to: string): boolean {
-  const current = semver.parse(normalizeVersion(from))
-  const target = semver.parse(normalizeVersion(to))
-  if (!current || !target)
-    return false
-  const currentCore = [current.major, current.minor, current.patch]
-  const targetCore = [target.major, target.minor, target.patch]
-  for (let index = 0; index < currentCore.length; index += 1) {
-    if (targetCore[index]! !== currentCore[index]!)
-      return targetCore[index]! > currentCore[index]!
-  }
-  return false
-}
-
 export function isCoreUnsupported(version: string): boolean {
   return compareVersions(version, MIN_SUPPORTED_CORE_VERSION) < 0
 }

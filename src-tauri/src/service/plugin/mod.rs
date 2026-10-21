@@ -21,8 +21,7 @@
 //! - [`internal`]：内置插件启动自愈（随包分发产物缺失/路径变更时强制重装）
 //! - [`verify`]：预装插件完整性自检（清单引用但 node_modules 产物缺失时 `pnpm install` 修复）
 //! - [`install`]：对外安装/升级/卸载编排（目录模块 `install/`：编排入口、spec 准备、
-//!   子进程环境、pnpm 选版、allowBuilds 白名单、错误诊断与产物核验），
-//!   以及启动时对 `plugins.depercated` 登记的社区插件自动卸载
+//!   子进程环境、pnpm 选版、allowBuilds 白名单、错误诊断与产物核验）
 //! - [`errors`]：插件错误记录（安装/升级/卸载失败 + 页面运行期上报，持久化）
 //! - [`process`]：dsh 子进程启动与输出流逐行转发
 //! - [`recovery`]：插件异常定位与一键离线卸载
@@ -64,7 +63,6 @@ pub(crate) use hmr::{status as local_plugin_hmr_status, sync_layer as local_plug
 pub(crate) use install::harness_prefer_bundled_pnpm_from;
 pub(crate) use install::local_spec_from_path;
 pub(crate) use install::packument;
-pub(crate) use install::uninstall_deprecated_plugins;
 pub use install::{
     allow_policy_versions, allow_version_exemptions, inspect_specs, install, install_specs,
     remove_many, update_many, IncompatibleVersion, PolicyBlockedVersion,

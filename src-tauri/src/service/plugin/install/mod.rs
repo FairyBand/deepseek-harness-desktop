@@ -22,8 +22,7 @@
 //!
 //! 模块划分（`install/`）：
 //! - [`self`]：安装编排入口（install / install_specs / install_internal）与 allowBuilds 重试循环
-//! - [`single`]：批量升级/卸载（`dsh plugin update/remove`，卸载后核验 + 离线兜底、
-//!   弃用插件自动卸载）
+//! - [`single`]：批量升级/卸载（`dsh plugin update/remove`，卸载后核验 + 离线兜底）
 //! - [`spec`]：安装 spec 准备（内置插件捆绑目录、GitHub 简写规范化、Windows 引号、包名解析）
 //! - [`inspect`]：安装前只读兼容性检查（registry `latest` + DSH 家族 peer 判定）
 //! - [`env`]：`dsh plugin` 子进程环境（$DSH_HOME 隔离、git HTTPS 强制）
@@ -48,7 +47,7 @@ pub(crate) use super::ensure_profile_npmrc;
 pub(crate) use super::errors;
 pub(crate) use super::installed::{installed_name, is_installed, profile_dir};
 pub(crate) use super::preset::{
-    bundled_dep_spec, bundled_plugin_dir, load_deprecated_ids, load_presets, PreinstallPluginInfo,
+    bundled_dep_spec, bundled_plugin_dir, load_presets, PreinstallPluginInfo,
 };
 pub(crate) use super::process::{
     acquire_operation_lock, acquire_process_lock, new_process_owner, run_plugin_process, PidGuard,
@@ -75,7 +74,6 @@ pub(crate) use pnpm::{
     bundled_pnpm_major, harness_prefer_bundled_pnpm, harness_prefer_bundled_pnpm_from,
     pnpm_major_version_at_bounded, profile_store_major,
 };
-pub(crate) use single::uninstall_deprecated_plugins;
 pub use single::{remove_many, update_many};
 // 版本兼容性/发布时长两类拦截的解析结果都要跨到 `bridge`（前端逐项确认后授权），在此定义出口
 pub use diagnose::{IncompatibleVersion, PolicyBlockedVersion};

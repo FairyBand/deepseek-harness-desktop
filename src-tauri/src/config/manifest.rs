@@ -99,7 +99,7 @@ pub struct VersionPair {
 ///
 /// `semver` crate 对预发布版本另设门槛：必须存在比较符与本版本 major.minor.patch 相同且
 /// 自带 pre。于是 `^0.2.0-rc.1` 漏掉 `0.2.1-rc.1` 这类同代更高补丁号的预发布核心（内核
-/// 侧放行），核心一发 rc 就把插件误标成不兼容并触发 `retire_on` 退役。补一个对本版本恒真
+/// 侧放行），核心一发 rc 就把插件误标成不兼容。补一个对本版本恒真
 /// 的精确比较符即可绕开门槛，其余比较符的判定不受影响。
 fn matches_including_prerelease(req: &semver::VersionReq, version: &semver::Version) -> bool {
     let matched = req.matches(version);
@@ -190,69 +190,6 @@ impl PluginVersion {
             }
         }
         declared
-    }
-
-    /// 已安装版本是否**旧于**核心当前那一代的推荐区间（`None` = 无法判定）。
-    ///
-    /// 区间是发布侧对「这一代核心该配哪个插件版本」的推荐，不是硬性上界：用户升级到
-    /// 比区间更新的版本（声明 `^0.21.1`、实装 `0.22.0`）是允许的，必须与「装了旧版
-    /// 本」区分开。判定按区间下界：低于下界 = 过期（核心换代后要重装）；达到或超过
-    /// 下界但超出上界 = 用户自行升级的新版本，保留。
-    pub fn outdated_for_core_generation(
-        &self,
-        core: Option<&str>,
-        installed: Option<&str>,
-    ) -> Option<bool> {
-        let floor = self.declared_floor_for_core(core)?;
-        let installed = semver::Version::parse(installed?).ok()?;
-        Some(installed < floor)
-    }
-
-    /// 某代声明的插件版本区间**下界**（`None` = 没有命中区间 / 区间不可解析 / 区间
-    /// 只写了上界，调用方按无法判定处理）。
-    ///
-    /// 只取**下界**比较符（`^` / `~` / `>=` / `>` / `=`），上界（`<` / `<=`）与
-    /// 通配符不参与：`<2.0.0` 这类纯上界声明没有下界语义，若把它当 2.0.0 会让所有
-    /// 已装版本都被判成过期而误删。区间是**合取**（需同时满足全部比较符），因此取各
-    /// 下界中的最大值——书写顺序与上界位置都不影响结果。
-    ///
-    /// 预发布标记必须一并保留：`^0.14.0-beta.1` 的下界是 `0.14.0-beta.1`，若截成
-    /// `0.14.0` 会把合法实装的 `0.14.0-beta.1` 误判成过期。
-    fn declared_floor_for_core(&self, core: Option<&str>) -> Option<semver::Version> {
-        let req = parse_req(self.plugin_req_for_core(core)?)?;
-        req.comparators
-            .iter()
-            .filter(|comparator| {
-                matches!(
-                    comparator.op,
-                    semver::Op::Exact
-                        | semver::Op::Greater
-                        | semver::Op::GreaterEq
-                        | semver::Op::Tilde
-                        | semver::Op::Caret
-                )
-            })
-            .map(|comparator| semver::Version {
-                major: comparator.major,
-                minor: comparator.minor.unwrap_or(0),
-                patch: comparator.patch.unwrap_or(0),
-                pre: comparator.pre.clone(),
-                build: semver::BuildMetadata::EMPTY,
-            })
-            .max()
-    }
-
-    /// 已安装版本是否落在矩阵声明的任一同代区间内（核心已超出时的清理判定）
-    pub fn matches_any_declared(&self, installed: Option<&str>) -> bool {
-        let PluginVersion::Matrix(pairs) = self else {
-            return false;
-        };
-        let Some(Ok(installed)) = installed.map(semver::Version::parse) else {
-            return false;
-        };
-        pairs
-            .iter()
-            .any(|pair| req_matches(&pair.version, &installed))
     }
 }
 
@@ -773,10 +710,6 @@ mod tests {
         assert!(!matrix.unsupported_on(None));
         assert!(!matrix.unsupported_on(Some("not-a-version")));
         assert!(matrix.unsupported_on(Some("0.2.1-rc.1")));
-        assert!(matrix.matches_any_declared(Some("0.21.3")));
-        assert!(matrix.matches_any_declared(Some("0.22.3")));
-        assert!(!matrix.matches_any_declared(Some("0.25.0")));
-        assert!(!matrix.matches_any_declared(None));
     }
 
     #[test]
@@ -823,120 +756,11 @@ mod tests {
     }
 
     #[test]
-    fn newer_installed_version_is_not_outdated() {
-        let matrix = PluginVersion::Matrix(vec![
-            VersionPair {
-                version: "^0.21.1".to_string(),
-                dsh: "^0.1.7-rc.1".to_string(),
-            },
-            VersionPair {
-                version: "^0.24.1".to_string(),
-                dsh: "^0.2.0-rc.1".to_string(),
-            },
-        ]);
-        for (core, installed, outdated) in [
-            (Some("0.1.7-rc.1"), Some("0.21.1"), Some(false)),
-            (Some("0.1.7-rc.1"), Some("0.21.3"), Some(false)),
-            (Some("0.1.7-rc.1"), Some("0.22.0"), Some(false)),
-            (Some("0.1.7-rc.1"), Some("1.0.0"), Some(false)),
-            (Some("0.1.7-rc.1"), Some("0.19.1"), Some(true)),
-            (Some("0.1.7-rc.1"), Some("0.20.9"), Some(true)),
-            (Some("0.2.1-rc.1"), Some("0.21.3"), Some(true)),
-            (Some("0.2.1-rc.1"), Some("0.24.1"), Some(false)),
-            (Some("0.2.1-rc.1"), Some("0.25.0"), Some(false)),
-            (Some("0.3.0"), Some("0.19.1"), None),
-            (Some("0.1.7-rc.1"), None, None),
-            (Some("0.1.7-rc.1"), Some("invalid"), None),
-            (None, Some("0.19.1"), None),
-        ] {
-            assert_eq!(
-                matrix.outdated_for_core_generation(core, installed),
-                outdated,
-                "core={core:?} installed={installed:?}"
-            );
-        }
-    }
-
-    /// 预发布下界必须整体保留：`^0.14.0-beta.1` 的合法实装版本不能被截成 `0.14.0`
-    /// 后误判为过期。
-    #[test]
-    fn outdated_keeps_prerelease_floor() {
-        let matrix = PluginVersion::Matrix(vec![VersionPair {
-            version: "^0.14.0-beta.1".to_string(),
-            dsh: "^0.1.7-rc.1".to_string(),
-        }]);
-        assert_eq!(
-            matrix.outdated_for_core_generation(Some("0.1.7-rc.1"), Some("0.14.0-beta.1")),
-            Some(false)
-        );
-        assert_eq!(
-            matrix.outdated_for_core_generation(Some("0.1.7-rc.1"), Some("0.14.0")),
-            Some(false)
-        );
-        assert_eq!(
-            matrix.outdated_for_core_generation(Some("0.1.7-rc.1"), Some("0.13.9")),
-            Some(true)
-        );
-    }
-
-    /// 字符串声明不参与过期判定（`latest` 这类标记没有区间语义）。
-    #[test]
-    fn declared_version_string_is_never_outdated() {
-        let declared = PluginVersion::Declared("latest".to_string());
-        assert_eq!(
-            declared.outdated_for_core_generation(Some("9.9.9"), Some("1.0.0")),
-            None
-        );
-    }
-
-    /// 下界只由下界比较符决定，与书写顺序、与是否同时写了上界无关；纯上界声明没有
-    /// 下界语义，一律判为无法判定（宁可保留也不误删）。
-    #[test]
-    fn outdated_floor_reads_lower_bound_comparators_only() {
-        let core = Some("0.1.7-rc.1");
-        let with = |req: &str| {
-            PluginVersion::Matrix(vec![VersionPair {
-                version: req.to_string(),
-                dsh: "^0.1.7-rc.1".to_string(),
-            }])
-        };
-        // 上界写在前面也不影响下界取值
-        assert_eq!(
-            with(">=1.2.0 <2.0.0").outdated_for_core_generation(core, Some("1.1.0")),
-            Some(true)
-        );
-        assert_eq!(
-            with(">=1.2.0 <2.0.0").outdated_for_core_generation(core, Some("1.5.0")),
-            Some(false)
-        );
-        // 多下界取最大值（区间是合取，必须同时满足）
-        assert_eq!(
-            with(">=1.4.0 >=1.2.0").outdated_for_core_generation(core, Some("1.3.0")),
-            Some(true)
-        );
-        assert_eq!(
-            with(">=1.4.0 >=1.2.0").outdated_for_core_generation(core, Some("1.4.0")),
-            Some(false)
-        );
-        // 纯上界：没有下界可判
-        assert_eq!(
-            with("<2.0.0").outdated_for_core_generation(core, Some("1.0.0")),
-            None
-        );
-        // 通配符：没有下界可判
-        assert_eq!(
-            with("*").outdated_for_core_generation(core, Some("1.0.0")),
-            None
-        );
-    }
-
-    #[test]
     fn declared_version_string_is_never_unsupported() {
         let declared = PluginVersion::Declared("latest".to_string());
         assert!(!declared.unsupported_on(Some("9.9.9")));
         // 字符串声明不参与按核心钉版本（`latest` 这类标记不该拼进 spec）
         assert_eq!(declared.plugin_req_for_core(Some("9.9.9")), None);
-        assert!(!declared.matches_any_declared(Some("9.9.9")));
     }
 
     #[test]

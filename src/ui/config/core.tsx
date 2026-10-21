@@ -15,7 +15,6 @@ import { Panel } from '@/components/panel'
 import { queryKeys } from '@/config/query-keys'
 import { useInvalidateOnSettingUpdated } from '@/hooks/use-invalidate-on-setting-updated'
 import { store } from '@/store'
-import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { DownloadCoreDialog } from '@/ui/dialog/update-core'
 import { compareVersions, isCoreUnsupported, MIN_SUPPORTED_CORE_VERSION } from '@/utils/core-version'
 import { silence } from '@/utils/silence'
@@ -24,7 +23,6 @@ import { toast } from '@/utils/toast'
 export function ConfigCore() {
   const [dialogHolder, openDialog] = useOverlay(Modal, { type: 'holder' })
   const [downloadDialogHolder, openDownloadDialog] = useOverlay(DownloadCoreDialog, { type: 'holder' })
-  const { holder: upgradeDialogHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   const { t } = useTranslation()
 
@@ -132,32 +130,26 @@ export function ConfigCore() {
       })
       return
     }
-    const activeCore = cores.find(c => c.active)
-    const guard = await guardCoreUpgrade(coreVersionKey(core), activeCore ? coreVersionKey(activeCore) : '')
-    if (!guard)
+    try {
+      const isRiskyVersion = core.recommendedVersion !== null
+        && (core.aboveRecommended || compareVersions(core.version, core.recommendedVersion) > 0)
+      await openDialog({
+        status: isRiskyVersion ? 'danger' : 'warning',
+        title: isRiskyVersion ? t('core.recommended_warning_title') : t('core.switch_confirm_title'),
+        description: (
+          <p>
+            <If
+              cond={isRiskyVersion}
+              then={t('core.recommended_warning_desc', { version: core.recommendedVersion ?? '' })}
+              else={t('core.switch_confirm_desc', { version: displayVersion(core) })}
+            />
+          </p>
+        ),
+      })
+    }
+    catch (e) {
+      silence(e, 'core switch: dialog cancelled')
       return
-    if (!guard.handled) {
-      try {
-        const isRiskyVersion = core.recommendedVersion !== null
-          && (core.aboveRecommended || compareVersions(core.version, core.recommendedVersion) > 0)
-        await openDialog({
-          status: isRiskyVersion ? 'danger' : 'warning',
-          title: isRiskyVersion ? t('core.recommended_warning_title') : t('core.switch_confirm_title'),
-          description: (
-            <p>
-              <If
-                cond={isRiskyVersion}
-                then={t('core.recommended_warning_desc', { version: core.recommendedVersion ?? '' })}
-                else={t('core.switch_confirm_desc', { version: displayVersion(core) })}
-              />
-            </p>
-          ),
-        })
-      }
-      catch (e) {
-        silence(e, 'core switch: dialog cancelled')
-        return
-      }
     }
     try {
       // 激活后由 restart 完成时统一失效核心查询；这里不等待联网列表重拉，
@@ -181,9 +173,6 @@ export function ConfigCore() {
     catch (err) {
       console.error('[ConfigCore] switch failed:', err)
       toast(t('core.switch_failed'), {})
-      // 核心没切成就把档案切回去：否则下次启动会跑在「旧核心 + 新档案」上，
-      // 用户会看到自己的插件与设置「凭空消失」。
-      await guard.rollback?.()
     }
   }
 
@@ -487,7 +476,6 @@ export function ConfigCore() {
 
       {dialogHolder}
       {downloadDialogHolder}
-      {upgradeDialogHolder}
     </div>
   )
 }
@@ -495,11 +483,6 @@ export function ConfigCore() {
 /** 版本展示：优先版本号，缺失回落来源 id */
 function displayVersion(version: HarnessCore): string {
   return version.version || (version.source === 'local' ? 'local' : 'app')
-}
-
-/** 版本判定用的版本串：版本号缺失时回落到 release tag（列表排序同款兜底） */
-function coreVersionKey(core: HarnessCore): string {
-  return core.version || core.tag
 }
 
 function isUnsupportedLocal(core: HarnessCore): boolean {

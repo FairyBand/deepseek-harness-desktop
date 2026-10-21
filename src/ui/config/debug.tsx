@@ -16,7 +16,6 @@ import { HARNESS_HEAP_MAX_MB, HARNESS_HEAP_MIN_MB } from '@/store/modules/settin
 import { ConfigAutoUpdate } from '@/ui/config/components/auto-update'
 import { ConfigCloseAction } from '@/ui/config/components/close-action'
 import { ConfigLaunchOnLogin } from '@/ui/config/components/launch-on-login'
-import { useCoreProfileSwitch } from '@/ui/config/hooks/use-core-profile-switch'
 import { writeClipboardText } from '@/utils/clipboard'
 import { toast } from '@/utils/toast'
 
@@ -46,7 +45,6 @@ export function ConfigDebug() {
   const { t, i18n } = useTranslation()
   const { serviceRunning, busyAction } = useStore(store.harness)
   const { updateInfo } = useStore(store.harnessUpdater)
-  const { holder: coreProfileSwitchHolder, guardCoreUpgrade } = useCoreProfileSwitch()
 
   // 端口编辑态：用户尚未输入时为 undefined，展示值始终以 store 中已保存的端口为准。
   // 初值不写入 state（避免渲染期副作用），用户一旦输入即以输入值为准。
@@ -77,18 +75,7 @@ export function ConfigDebug() {
   })
 
   function handleShowNewVersion() {
-    store.harnessUpdater.showToast(() => handleUpdate())
-  }
-
-  async function handleUpdate() {
-    const info = store.harnessUpdater.updateInfo
-    if (!info)
-      return
-    const guard = await guardCoreUpgrade(info.tag)
-    if (!guard)
-      return
-    if (!(await store.harnessUpdater.handleUpdate()))
-      await guard.rollback?.()
+    store.harnessUpdater.showToast(() => store.harnessUpdater.handleUpdate())
   }
 
   const { mutate: onToggleCliLink } = useMutation({
@@ -257,7 +244,6 @@ export function ConfigDebug() {
           </Button>
         )}
       />
-      {coreProfileSwitchHolder}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted">

@@ -52,28 +52,6 @@ impl PreinstallPluginInfo {
             .as_ref()
             .is_some_and(|version| version.unsupported_on(core_version))
     }
-
-    /// 核心驱动的退役判定（弃用 / 被核心吸收后自动卸载）。
-    ///
-    /// - 核心命中某代区间：已装版本**旧于**该代声明的插件区间 → 退役（安装流程会按该代
-    ///   区间钉版本重装，见 `preset_spec_for_install`）；已装版本达到或超过区间下界
-    ///   （含超出区间上界的自升级版本，如声明 `^0.21.1` 实装 `0.22.0`）→ 保留，
-    ///   区间是发布侧推荐而非硬上界，不能把用户的升级版本卸载掉；
-    /// - 核心超出全部区间：已装版本仍落在任一同代区间内（旧版本）→ 退役；
-    /// - 未声明区间 / 版本不可解析 / 已装版本无法解析 → 不退役（宁可保留也不误删）。
-    pub(crate) fn retire_on(
-        &self,
-        core_version: Option<&str>,
-        installed_version: Option<&str>,
-    ) -> bool {
-        let Some(version) = self.version.as_ref() else {
-            return false;
-        };
-        if version.unsupported_on(core_version) {
-            return version.matches_any_declared(installed_version);
-        }
-        version.outdated_for_core_generation(core_version, installed_version) == Some(true)
-    }
 }
 
 /// 清单条目 → 统一插件信息：`checked` 是唯一真值，按前端预选语义派生出
@@ -478,13 +456,6 @@ pub(crate) fn presets_from_manifest(
 
 /// 读取弃用插件名单（`resources/manifest.jsonc` 的 `plugins.depercated`），返回
 /// 已登记的预设插件 id 集合。
-///
-/// 弃用是发布侧决策：某社区插件下架/被替换后，把它的 id 追加进清单，桌面端每次
-/// 启动核对「已安装 → 自动卸载」（见
-/// [`super::install::uninstall_deprecated_plugins`]）。与 `plugins.preset` 分开
-/// 维护：预设清单只描述「可安装项」，弃用名单只描述「不再提供安装入口的预设 id」，
-/// 调整弃用名单不会让既有用户重新进入首次引导。清单缺失/损坏时回落为空集合，
-/// 不阻断启动（与其它清单同一降级策略）。
 pub(crate) fn load_deprecated_ids(app_handle: &AppHandle) -> HashSet<String> {
     config::manifest::read(app_handle)
         .map(|manifest| manifest.plugins.deprecated.into_iter().collect())
@@ -635,42 +606,6 @@ mod tests {
         }
     }
 
-    /// 核心驱动的退役判定：核心命中某代区间 → 已装版本不属于该代才退役（旧版插件在
-    /// 核心换代后要卸掉，由安装流程按该代区间钉版本重装）；核心超出全部区间 → 已安装
-    /// 版本仍落在任一同代区间内才退役（新版本宁可保留）。
-    #[test]
-    fn retire_decision_matrix_follows_declared_ranges() {
-        let declared = matrix(&[("^1.2.0", "^0.1.5-rc.1"), ("^1.4.0", "^0.1.7-rc.1")]);
-        for (core, installed, retire) in [
-            (Some("0.1.5-rc.3"), Some("1.2.0"), false),
-            (Some("0.1.6"), Some("1.2.5"), false),
-            (Some("0.1.6"), Some("1.4.0"), false),
-            (Some("0.1.7-rc.2"), Some("1.4.0"), false),
-            (Some("0.1.7-rc.2"), Some("1.2.0"), true),
-            (Some("0.2.0"), Some("1.4.0"), true),
-            (Some("0.2.0"), Some("1.2.0"), true),
-            (Some("0.2.0"), Some("2.0.0"), false),
-            (Some("0.2.0"), Some("1.0.0"), false),
-            (Some("0.1.6"), None, false),
-            (Some("0.1.6"), Some("invalid"), false),
-            (None, Some("1.2.0"), false),
-            (Some("invalid"), Some("1.2.0"), false),
-        ] {
-            let mut entry = load_presets_for_test()
-                .into_iter()
-                .find(|p| p.id == "dshmarket")
-                .expect("dshmarket");
-            entry.version = Some(declared.clone());
-            assert_eq!(
-                entry.retire_on(core, installed),
-                retire,
-                "core={core:?} installed={installed:?}"
-            );
-        }
-    }
-
-    /// 回归：同代内的预发布核心（如 `0.2.1-rc.1`）不得把插件判成不兼容，进而不该触发
-    /// 退役；上一代遗留版本仍要退役重装。
     #[test]
     fn prerelease_core_in_same_generation_keeps_plugins() {
         let mut entry = load_presets_for_test()
@@ -680,8 +615,6 @@ mod tests {
         entry.version = Some(matrix(&[("^0.24.1", "^0.2.0-rc.1")]));
         for core in ["0.2.0-rc.1", "0.2.0-rc.2", "0.2.0", "0.2.1-rc.1"] {
             assert!(!entry.unsupported_on(Some(core)), "core={core}");
-            assert!(!entry.retire_on(Some(core), Some("0.24.5")), "core={core}");
-            assert!(entry.retire_on(Some(core), Some("0.23.0")), "core={core}");
         }
     }
 
@@ -827,40 +760,26 @@ mod tests {
 
     #[test]
     fn deprecated_manifest_lists_absorbed_panel() {
-        // 0.15.0 把 dsh-tauri-panel 并入核心，并从内置清单移除了条目，
-        // 升级用户只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入软件页面）。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-panel"));
     }
 
     #[test]
     fn deprecated_manifest_lists_absorbed_connection() {
-        // dsh-tauri-connection 的载体鉴权适配已并入 dsh-tauri 核心插件，并从内置
-        // 清单移除了条目：升级用户的 link: 依赖与 bundle 引用只能靠弃用名单兜底
-        // 卸载（残留 bundle 会导致无法进入软件页面）。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-connection"));
     }
 
     #[test]
     fn deprecated_manifest_lists_the_renamed_bridge() {
-        // dsh-tauri-bridge 改名为 dsh-tauri-kernel（该功能已整体退役）：老档案里的
-        // link: 依赖与 bundle 引用只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入
-        // 软件页面）。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-bridge"));
     }
 
     #[test]
     fn deprecated_manifest_lists_the_retired_kernel() {
-        // dsh-tauri-kernel 因原生内核不稳定退役，并从内置清单移除了条目：升级用户的
-        // link: 依赖与 bundle 引用只能靠弃用名单兜底卸载（残留 bundle 会导致无法进入
-        // 软件页面）。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-kernel"));
     }
 
     #[test]
     fn deprecated_manifest_lists_absorbed_running_changes() {
-        // dsh-tauri-running-changes 已并入 dsh-tauri-experimental，并从内置清单移除
-        // 条目：升级用户的残留副本仍从 dsh-tauri 导入 1.0.0 已移出的符号，启动即
-        // import 失败，只能靠弃用名单兜底卸载。
         assert!(shipped_deprecated_ids().contains("dsh-tauri-running-changes"));
     }
 
@@ -1248,8 +1167,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// dev 候选覆盖静态条目时必须沿用清单声明的版本矩阵：退役判定读的是发布侧的
-    /// 核心计划，与当前 checkout 是否存在该包源码无关。
     #[cfg(debug_assertions)]
     #[test]
     fn dev_merge_carries_static_version_declaration() {
@@ -1285,9 +1202,6 @@ mod tests {
         assert_eq!(renamed.description, "desc");
         assert!(!renamed.unsupported_on(Some("0.1.7-alpha.0")));
         assert!(renamed.unsupported_on(Some("0.2.0")));
-        assert!(!renamed.retire_on(Some("0.1.7-alpha.0"), Some("1.2.3")));
-        assert!(renamed.retire_on(Some("0.2.0"), Some("1.2.3")));
-        assert!(!renamed.retire_on(Some("0.2.0"), Some("2.0.0")));
         // dev 覆盖语义不变：条目仍来自仓库源码
         assert!(renamed.internal);
         std::fs::remove_dir_all(&root).ok();
