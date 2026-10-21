@@ -212,6 +212,16 @@
         "version": "latest"
       },
       {
+        "id": "dsh-ops",
+        "spec": "dsh-ops",
+        "name": "DSH Optimize",
+        "description": "dsh-ops 底层操作工具插件，旨在减少 Token 消耗与任务耗时。 ｜ A toolkit for low-level operations in DSH, designed to reduce token usage and task execution time.",
+        "repo": "https://github.com/T-Auto/dsh-ops",
+        "recommended": true,
+        "checked": false,
+        "version": "latest"
+      },
+      {
         "id": "dshmarket",
         "spec": "dshmarket",
         "name": "DSH Market",
@@ -239,16 +249,6 @@
             "dsh": "^0.2.0-rc.1"
           }
         ]
-      },
-      {
-        "id": "dsh-ops",
-        "spec": "dsh-ops",
-        "name": "DSH OPS",
-        "description": "DSH 底层操作工具插件，旨在减少 Token 消耗与任务耗时。 ｜ A toolkit for low-level operations in DSH, designed to reduce token usage and task execution time.",
-        "repo": "https://github.com/T-Auto/dsh-ops",
-        "recommended": true,
-        "checked": false,
-        "version": "latest"
       },
       {
         "id": "@changfenhuang/dsh-genui",
