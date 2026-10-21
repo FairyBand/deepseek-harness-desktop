@@ -48,9 +48,20 @@ fn read_preset_entries(app: &AppHandle) -> Result<Vec<PresetPetEntry>, String> {
     let store = app
         .store(crate::config::store_dat_file_name())
         .map_err(|error| format!("PET_REMOTE_STORE_FAILED: {error}"))?;
-    let mut entries: Vec<PresetPetEntry> = manifest
-        .pets
-        .built_in
+    merge_entries(
+        manifest.pets.built_in,
+        remote_catalog(store.get(REMOTE_PET_CATALOG_KEY))?,
+    )
+}
+
+/// 内置优先：登记条目与内置 id 撞车时丢弃登记条目（宠物先进登记清单、后被收进内置清单
+/// 的机器会留下这种残余），其余仍按内置在前、登记在后的顺序校验。
+fn merge_entries(
+    built_in: Vec<PresetPetSpec>,
+    remote: Vec<PresetPetSpec>,
+) -> Result<Vec<PresetPetEntry>, String> {
+    let built_in_ids: HashSet<String> = built_in.iter().map(|spec| spec.id.clone()).collect();
+    let mut entries: Vec<PresetPetEntry> = built_in
         .into_iter()
         .map(|spec| PresetPetEntry {
             spec,
@@ -58,8 +69,9 @@ fn read_preset_entries(app: &AppHandle) -> Result<Vec<PresetPetEntry>, String> {
         })
         .collect();
     entries.extend(
-        remote_catalog(store.get(REMOTE_PET_CATALOG_KEY))?
+        remote
             .into_iter()
+            .filter(|spec| !built_in_ids.contains(&spec.id))
             .map(|spec| PresetPetEntry { spec, remote: true }),
     );
     let catalog: Vec<PresetPetSpec> = entries.iter().map(|entry| entry.spec.clone()).collect();
@@ -304,6 +316,40 @@ mod tests {
         assert_eq!(catalog.len(), 1);
         assert_eq!(drop_registered(&mut catalog, "remote"), Ok(()));
         assert!(catalog.is_empty());
+    }
+
+    #[test]
+    fn merge_drops_registrations_shadowed_by_a_built_in_id() {
+        let spec = |id: &str, config: &str| -> PresetPetSpec {
+            serde_json::from_str(&format!(
+                r#"{{"id":"{id}","name":"Pet","config":"{config}","uri":{{"default":"https://e/w"}}}}"#
+            ))
+            .unwrap()
+        };
+        let entries = merge_entries(
+            vec![spec("shared", "https://builtin/config.jsonc")],
+            vec![
+                spec("shared", "https://registered/config.jsonc"),
+                spec("registered", "https://registered2/config.jsonc"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.spec.id.as_str(), entry.remote))
+                .collect::<Vec<_>>(),
+            [("shared", false), ("registered", true)]
+        );
+        assert_eq!(entries[0].spec.config, "https://builtin/config.jsonc");
+        assert!(merge_entries(
+            Vec::new(),
+            vec![
+                spec("dup", "https://a/config.jsonc"),
+                spec("dup", "https://b/config.jsonc"),
+            ],
+        )
+        .is_err());
     }
 
     #[test]
