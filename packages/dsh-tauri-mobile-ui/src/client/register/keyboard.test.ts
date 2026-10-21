@@ -11,7 +11,13 @@ vi.mock('dsh-tauri/client', () => ({
 
 let controller: ReturnType<typeof createLifecycleController>
 let editor: HTMLElement
+let viewport: FakeViewport
 const labels: Record<string, string> = { 'input.send': '发送消息', 'input.send.queue': '排队发送', 'input.send.steer': '插话发送' }
+
+class FakeViewport extends EventTarget {
+  height = window.innerHeight
+  scale = 1
+}
 
 function touch(type: string, x: number, y: number, target: Element = document.querySelector('[data-conversation-scroll]')!) {
   const event = new Event(type, { bubbles: true, cancelable: true })
@@ -25,6 +31,8 @@ beforeEach(() => {
   document.body.innerHTML = '<div data-conversation-scroll><p>Message</p><div data-composer-seat><textarea></textarea><button aria-label="发送消息"><svg></svg></button></div></div><input id="setting">'
   editor = document.querySelector('textarea')!
   editor.focus()
+  viewport = new FakeViewport()
+  Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
   controller = createLifecycleController()
   const register = registerMobileKeyboard as unknown as (controller: unknown, ctx: unknown) => void
   register(controller, { locale: { bind: () => (key: string) => labels[key] ?? key } })
@@ -32,6 +40,8 @@ beforeEach(() => {
 
 afterEach(() => {
   controller.dispose()
+  Reflect.deleteProperty(window, 'visualViewport')
+  document.documentElement.removeAttribute('style')
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
@@ -94,5 +104,40 @@ describe('mobile composer keyboard dismissal', () => {
     touch('touchstart', 100, 100)
     touch('touchmove', 100, 130)
     expect(document.activeElement).toBe(editor)
+  })
+})
+
+describe('mobile keyboard viewport fit', () => {
+  const reserved = () => document.documentElement.style.getPropertyValue('--dsh-mobile-viewport-height')
+
+  it('reserves the visible height while a text field is focused and releases it afterwards', () => {
+    viewport.height = 420
+    viewport.dispatchEvent(new Event('resize'))
+    expect(reserved()).toBe('420px')
+    viewport.height = window.innerHeight
+    editor.blur()
+    viewport.dispatchEvent(new Event('resize'))
+    expect(reserved()).toBe('')
+  })
+
+  it('ignores a shrunken viewport without a focused text field', () => {
+    editor.blur()
+    viewport.height = 420
+    viewport.dispatchEvent(new Event('resize'))
+    expect(reserved()).toBe('')
+  })
+
+  it('follows the keyboard height the iOS app reports', () => {
+    const report = (height: number) => window.dispatchEvent(new CustomEvent('dsh-mobile-keyboard', { detail: { height } }))
+    report(300)
+    expect(reserved()).toBe(`${window.innerHeight - 300}px`)
+    report(0)
+    expect(reserved()).toBe('')
+  })
+
+  it('drops the reservation when the plugin unloads', () => {
+    window.dispatchEvent(new CustomEvent('dsh-mobile-keyboard', { detail: { height: 300 } }))
+    controller.dispose()
+    expect(reserved()).toBe('')
   })
 })

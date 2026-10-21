@@ -3,7 +3,13 @@ import { MOBILE_MEDIA_QUERIES } from 'dsh-tauri/client'
 
 const { c } = cssr
 
-export default c(`@media ${MOBILE_MEDIA_QUERIES.join(' and ')}`, [
+// keep: The keyboard does not resize the layout viewport on iOS, so the page height is pinned to the
+// height reported while a text field is focused; iPad landscape uses the desktop layout, hence no media query.
+const keyboardFit = c(':root', {
+  height: 'var(--dsh-mobile-viewport-height, 100%)',
+})
+
+export default c([c(`@media ${MOBILE_MEDIA_QUERIES.join(' and ')}`, [
   c('html[data-dsh-mobile-sidebar], html[data-dsh-mobile-sidebar] body', {
     overflow: 'hidden',
   }),
@@ -254,4 +260,4 @@ export default c(`@media ${MOBILE_MEDIA_QUERIES.join(' and ')}`, [
       transition: 'none !important',
     }),
   ]),
-])
+]), keyboardFit])

@@ -398,3 +398,8 @@ export function createNotificationShim(origin: string, nonce: string, nativeSafe
 export function nativeMessageScript(origin: string, nonce: string, payload: Record<string, unknown>): string {
   return `if (window.top === window && location.origin === ${JSON.stringify(origin)} && window.__dshBridgeNonce === ${JSON.stringify(nonce)}) { window.__dshBridgeReceive && window.__dshBridgeReceive(${JSON.stringify({ ...payload, nonce })}); } true;`
 }
+
+export function keyboardHeightScript(origin: string, height: number): string {
+  const detail = { detail: { height: Math.max(0, Math.round(height)) } }
+  return `if (window.top === window && location.origin === ${JSON.stringify(origin)}) window.dispatchEvent(new CustomEvent('dsh-mobile-keyboard', ${JSON.stringify(detail)})); true;`
+}

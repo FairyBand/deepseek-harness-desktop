@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { createContext as createVmContext, runInContext } from 'node:vm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createNotificationShim, nativeMessageScript, parseNativeMessage } from './webview-bridge'
+import { createNotificationShim, keyboardHeightScript, nativeMessageScript, parseNativeMessage } from './webview-bridge'
 
 const origin = 'https://harness.test:3080'
 const nonce = 'bridge-nonce'
@@ -139,7 +139,7 @@ function createBrowser(options: { locationOrigin?: string, topFrame?: boolean, h
   }
   const location = { origin: options.locationOrigin ?? origin }
   const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 404 }))
-  const context = createVmContext({ window, document, location, fetch, MutationObserver: BrowserMutationObserver, Event, MessageEvent: BrowserMessageEvent, Date, setTimeout, clearTimeout })
+  const context = createVmContext({ window, document, location, fetch, MutationObserver: BrowserMutationObserver, Event, CustomEvent, MessageEvent: BrowserMessageEvent, Date, setTimeout, clearTimeout })
   function run(script: string): unknown {
     return runInContext(script, context, { timeout: 1000 })
   }
@@ -1163,5 +1163,38 @@ describe('nativeMessageScript origin guard', () => {
     browser.run(nativeMessageScript(origin, nonce, { type: 'dsh://visibility-state', hidden: true, nonce: 'forged-nonce' }))
 
     expect(receive).toHaveBeenCalledExactlyOnceWith({ type: 'dsh://visibility-state', hidden: true, nonce: 'bridge-nonce' })
+  })
+})
+
+describe('keyboardHeightScript', () => {
+  function keyboardEvents() {
+    const browser = createBrowser()
+    const seen: CustomEvent<{ height: number }>[] = []
+    browser.window.addEventListener('dsh-mobile-keyboard', event => void seen.push(event as CustomEvent<{ height: number }>))
+    return { browser, seen }
+  }
+
+  it('reports the rounded keyboard height to the trusted page', () => {
+    const { browser, seen } = keyboardEvents()
+
+    expect(browser.run(keyboardHeightScript(origin, 400.7))).toBe(true)
+    expect(seen.map(event => event.detail)).toEqual([{ height: 401 }])
+  })
+
+  it('clamps a dismissed keyboard to zero', () => {
+    const { browser, seen } = keyboardEvents()
+
+    browser.run(keyboardHeightScript(origin, -1))
+
+    expect(seen.map(event => event.detail)).toEqual([{ height: 0 }])
+  })
+
+  it.each([{ locationOrigin: 'https://evil.test:3080' }, { topFrame: false }])('ignores untrusted documents or subframes %j', (options) => {
+    const browser = createBrowser(options)
+    const seen: Event[] = []
+    browser.window.addEventListener('dsh-mobile-keyboard', event => void seen.push(event))
+
+    expect(browser.run(keyboardHeightScript(origin, 400))).toBe(true)
+    expect(seen).toHaveLength(0)
   })
 })

@@ -250,4 +250,15 @@ describe('mobile conversation layout', () => {
     })
     expect(declarations).toEqual([['padding-bottom', '0', true]])
   })
+
+  it('pins the page to the keyboard-free height reported by the shell, outside the mobile layout', () => {
+    const values: unknown[] = []
+    root.walkRules(':root', (rule) => {
+      expect(rule.parent?.type).toBe('root')
+      rule.walkDecls((decl) => {
+        values.push([decl.prop, decl.value, decl.important])
+      })
+    })
+    expect(values).toEqual([['height', 'var(--dsh-mobile-viewport-height, 100%)', undefined]])
+  })
 })

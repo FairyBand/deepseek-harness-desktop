@@ -91,6 +91,36 @@ it('releases document scrolling when mobile sidebar ownership ends', async () =>
   }
 })
 
+it('pins the page to the keyboard height reported while composing in the desktop layout', async () => {
+  const page = await browser.newPage({ hasTouch: true, viewport: { width: 1180, height: 820 } })
+  try {
+    await page.setContent(`<!doctype html><html><head>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>html,body,#root{height:100%;margin:0}
+      #root{display:flex;flex-direction:column}
+      [data-conversation-scroll]{flex:1;min-height:0;overflow:auto}
+      article{height:2400px}
+      [data-composer-seat]{flex-shrink:0;height:120px}</style></head><body>
+      <div id="root">
+        <div data-conversation-scroll><article>Messages</article></div>
+        <div data-composer-seat><textarea aria-label="Draft"></textarea></div>
+      </div>
+    </body></html>`)
+    await page.addStyleTag({ content: mobileStyle.render() })
+    const seat = page.locator('[data-composer-seat]')
+    const seatBottom = () => seat.evaluate(element => Math.round(element.getBoundingClientRect().bottom))
+    expect(await seatBottom(), '无键盘时输入区贴在视口底部').toBe(820)
+    await page.evaluate(() => document.documentElement.style.setProperty('--dsh-mobile-viewport-height', '520px'))
+    expect(await page.evaluate(() => Math.round(document.documentElement.getBoundingClientRect().height)), 'iPad 横屏的桌面布局也须按键盘高度收缩').toBe(520)
+    expect(await seatBottom(), '键盘弹出后输入区须守在键盘上沿').toBe(520)
+    await page.evaluate(() => document.documentElement.style.removeProperty('--dsh-mobile-viewport-height'))
+    expect(await seatBottom(), '键盘收起后输入区须回到视口底部').toBe(820)
+  }
+  finally {
+    await page.close()
+  }
+})
+
 it('leaves document scrolling unchanged for desktop pointer media', async () => {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   try {

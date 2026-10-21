@@ -10,7 +10,7 @@ import { useThemeColor } from 'heroui-native/hooks'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { If, Then } from 'react-if-lite'
-import { BackHandler, Linking, Modal, Platform, Pressable, Text, View } from 'react-native'
+import { BackHandler, Dimensions, Keyboard, Linking, Modal, Platform, Pressable, Text, View } from 'react-native'
 import { ArrowLeft, Hand } from 'react-native-lucide'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { WebView } from 'react-native-webview'
@@ -24,7 +24,7 @@ import { requestNotificationAccess, sendNativeNotification } from '@/hooks/use-n
 import { connection } from '@/store/modules/connection'
 import { connectAddress, refreshHealth } from '@/store/modules/connection/runtime'
 import { buildConnectUrl, isTrustedOrigin } from '@/utils/bridge-protocol'
-import { createNotificationShim, nativeMessageScript, parseNativeMessage } from '@/utils/webview-bridge'
+import { createNotificationShim, keyboardHeightScript, nativeMessageScript, parseNativeMessage } from '@/utils/webview-bridge'
 
 export function BridgeWebView({ address, generation }: { address: BridgeAddress, generation: number }) {
   const ref = useRef<WebView>(null)
@@ -55,6 +55,16 @@ export function BridgeWebView({ address, generation }: { address: BridgeAddress,
   if (Platform.OS !== 'ios')
     edges.push('bottom')
   const shim = createNotificationShim(address.id, nonce, edges)
+  // keep:effect The WebView keeps its frame under the iOS keyboard, so the page has to reserve the covered height itself; the keyboard top comes from the frame event so docked, resized and floating keyboards all report their real overlap.
+  useEffect(() => {
+    if (Platform.OS !== 'ios')
+      return
+    const subscription = Keyboard.addListener('keyboardWillChangeFrame', (event) => {
+      const covered = Dimensions.get('window').height - event.endCoordinates.screenY
+      ref.current?.injectJavaScript(keyboardHeightScript(address.id, covered))
+    })
+    return () => subscription.remove()
+  }, [address.id])
   // keep:effect Mirror native visibility into the authenticated loaded document.
   useEffect(() => {
     if (!documentReady || state.loadError)
