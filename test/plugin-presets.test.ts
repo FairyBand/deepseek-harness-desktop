@@ -38,6 +38,31 @@ describe('community plugin presets', () => {
     expect(ids[ids.indexOf('dsh-office-kit') + 1]).toBe('dshmarket')
   })
 
+  it('recommends DSH OPS without preselecting it immediately before DSH GenUI', () => {
+    expect(presets.filter(plugin => plugin.id === 'dsh-ops')).toMatchObject([
+      {
+        spec: 'dsh-ops',
+        name: 'DSH OPS',
+        repo: 'https://github.com/T-Auto/dsh-ops',
+        recommended: true,
+        checked: false,
+        version: 'latest',
+      },
+    ])
+    const ids = presets.map(plugin => plugin.id)
+    expect(ids[ids.indexOf('dsh-ops') + 1]).toBe('@changfenhuang/dsh-genui')
+  })
+
+  it.each([
+    ['@changfenhuang/dsh-genui', /^交互式界面插件/],
+    ['dsh-context', /^一站式 DeepSeek Harness 上下文可视化插件/],
+    ['billion-context', /^基本稳定可用。上下文压缩插件/],
+  ])('%s leads its description with Chinese', (id, prefix) => {
+    expect(presets.filter(plugin => plugin.id === id)).toMatchObject([
+      { description: expect.stringMatching(prefix) },
+    ])
+  })
+
   it('keeps DSH Market unselected and ordered after Billion Context', () => {
     const ids = presets.map(plugin => plugin.id)
     expect(ids.indexOf('dshmarket')).toBeGreaterThan(ids.indexOf('billion-context'))
@@ -51,7 +76,7 @@ describe('community plugin presets', () => {
       id: '@changfenhuang/dsh-genui',
       spec: '@changfenhuang/dsh-genui',
       name: 'DSH GenUI',
-      description: 'GenUI for DeepSeek Harness: interactive UI components rendered inline in assistant replies via the dsh-ui fence — layout, charts, plots, forms, quizzes, mermaid, 3D scenes, and an action event loop back to the model. Ships the fence-teaching host plugin, the browser renderer (client half), and the genui skill.',
+      description: '交互式界面插件，通过 dsh-ui 代码块在助手回复中直接呈现布局、图表、绘图、表单、测验、Mermaid 和 3D 场景，并将交互事件回传模型。内含宿主插件、浏览器渲染器和 genui 技能。 ｜ GenUI for DeepSeek Harness: interactive UI components rendered inline in assistant replies via the dsh-ui fence — layout, charts, plots, forms, quizzes, mermaid, 3D scenes, and an action event loop back to the model. Ships the fence-teaching host plugin, the browser renderer (client half), and the genui skill.',
       repo: 'https://github.com/omdsh-dev/dsh-genui',
       recommended: false,
       checked: false,
@@ -61,13 +86,13 @@ describe('community plugin presets', () => {
       id: 'dsh-context',
       spec: 'dsh-context',
       name: 'DSH Context',
-      description: 'The best DeepSeek Harness plugin for context insight and management, with context dashboard / browser / sidebar and context command, for context statistics, composition, breakdown, evolution details, understanding how the context is made of, and how it evolves. 一站式 DeepSeek Harness 上下文可视化插件，Context 面板及浏览器和侧边栏与 Context 命令，透视上下文组成、演进、压缩、剪枝等事件与动作。',
+      description: '一站式 DeepSeek Harness 上下文可视化插件，Context 面板及浏览器和侧边栏与 Context 命令，透视上下文组成、演进、压缩、剪枝等事件与动作。 ｜ The best DeepSeek Harness plugin for context insight and management, with context dashboard / browser / sidebar and context command, for context statistics, composition, breakdown, evolution details, understanding how the context is made of, and how it evolves.',
       repo: 'https://github.com/bowenliang123/dsh-context',
       recommended: false,
       checked: false,
       version: 'latest',
     },
-  ])('lists $id once as an optional preset with its GitHub About description', (expected) => {
+  ])('lists $id once as an optional preset with its Chinese-first bilingual description', (expected) => {
     expect(presets.filter(plugin => plugin.id === expected.id)).toEqual([expected])
   })
 })
