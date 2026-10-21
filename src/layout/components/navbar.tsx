@@ -39,8 +39,10 @@ import { IS_MACOS, onDragRegionPointerDown, useMacOSFullscreen, useMaximized } f
 /**
  * 壳层窗口顶部导航栏（44px，常驻）：
  *
- *   [侧边栏(展开/收起)] [文件][运行][帮助][更新可用] [ 空白拖拽区 ] [远程][本地/远端] [最小化][最大化][关闭(X)]
+ *   [侧边栏(展开/收起)] [文件][运行][帮助][子窗口][更新可用] [ 空白拖拽区 ] [远程][本地/远端] [最小化][最大化][关闭(X)]
  *
+ * - 子窗口：非主窗口（`window-N` / `remote-N`）在「帮助」右侧挂一个「子窗口」Chip，
+ *   主窗口不渲染——多开出来的窗口外观完全相同，靠它区分。
  * - 侧边栏：经 postMessage 操控 iframe 内的 dsh 应用
  *   （`dsh://sidebar:toggle`，由 dsh-tauri 插件的 `client/register/sidebar.ts`
  *   （`ctx.layout.toggleSidebar`）执行）；折叠图标由 iframe 回报的
@@ -247,6 +249,7 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
 
   // 仅当 dsh-tauri 插件启用（已安装）时显示左侧导航控件
   const tauriEnabled = plugins.some(plugin => plugin.id === TAURI_PLUGIN_ID)
+  const isMainWindow = getCurrentWindow().label === 'main'
   const isNightly = appIdentifier === 'dsh-tauri-nightly'
   const showUpdateAvailable = appIdentifier != null && !isNightly && updateInfo != null
 
@@ -745,6 +748,12 @@ export function Navbar({ onRemoteChange, sidebarCollapsed = false, onToggleSideb
             </Dropdown.Popover>
           </Dropdown>
         </div>
+      </If>
+
+      <If cond={!isMainWindow}>
+        <Chip className="ml-1 shrink-0 text-xs" color="default" size="sm" variant="soft" data-testid="dsh-navbar-child-window-chip">
+          {t('navbar.child_window')}
+        </Chip>
       </If>
 
       <If cond={isNightly}>
