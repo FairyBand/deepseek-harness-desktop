@@ -2,18 +2,22 @@ import type { HostContext, IndexInjectRow } from './types'
 import { createContext, runInContext } from 'node:vm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply } from './apply'
+import { MEDIA_RECORDER_SHIM_SCRIPT } from './media-recorder-shim'
 
 afterEach(() => {
   vi.unstubAllEnvs()
 })
 
 function activate() {
-  let inject: ((table: IndexInjectRow[]) => void) | undefined
+  const listeners: ((table: IndexInjectRow[]) => void)[] = []
   const on = vi.fn((event: string, listener: (table: IndexInjectRow[]) => void) => {
     expect(event).toBe('webserver/index-inject')
-    inject = listener
+    listeners.push(listener)
     return () => {
-      inject = undefined
+      const index = listeners.indexOf(listener)
+      if (index >= 0) {
+        listeners.splice(index, 1)
+      }
     }
   })
   const ctx = {
@@ -25,7 +29,7 @@ function activate() {
   apply(ctx)
   return { on, collect: (): IndexInjectRow[] => {
     const table: IndexInjectRow[] = []
-    inject?.(table)
+    for (const listener of listeners) listener(table)
     return table
   } }
 }
@@ -50,10 +54,9 @@ describe('desktop account marker', () => {
     vi.stubEnv('DSH_TAURI_EMBEDDED', '1')
     const { collect, on } = activate()
 
-    expect(on).toHaveBeenCalledOnce()
+    expect(on).toHaveBeenCalled()
     const rows = collect()
-    expect(rows).toHaveLength(1)
-    const row = rows[0]
+    const row = rows.find(item => item.kind === 'script' && item.text.includes('protocolVersion'))
     expect(row?.kind).toBe('script')
     expect(row?.kind === 'script' ? row.placement : undefined).toBe('head')
 
@@ -68,11 +71,124 @@ describe('desktop account marker', () => {
     expect(runMarker(script, '?t=1')).toBeUndefined()
   })
 
+  it('injects the media recorder shim into the head', () => {
+    vi.stubEnv('DSH_TAURI_EMBEDDED', '1')
+    const rows = activate().collect()
+
+    const shim = rows.find(item => item.kind === 'script' && item.text === MEDIA_RECORDER_SHIM_SCRIPT)
+    expect(shim?.kind === 'script' ? shim.placement : undefined).toBe('head')
+  })
+
   it('does not advertise a desktop carrier to standalone web', () => {
     vi.stubEnv('DSH_TAURI_EMBEDDED', '0')
     const { collect, on } = activate()
 
     expect(on).not.toHaveBeenCalled()
     expect(collect()).toEqual([])
+  })
+})
+
+const WEBKITGTK_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+const CHROME_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36'
+
+interface RecorderCall {
+  stream: unknown
+  options?: Record<string, unknown>
+}
+
+function installRecorder(userAgent: string) {
+  const calls: RecorderCall[] = []
+  class FakeMediaRecorder {
+    static isTypeSupported(type: string): boolean {
+      return type === 'audio/webm;codecs=opus' || type === 'audio/ogg;codecs=opus'
+    }
+
+    constructor(stream: unknown, options?: Record<string, unknown>) {
+      calls.push({ stream, options })
+    }
+  }
+  const sandbox: Record<string, unknown> = { navigator: { userAgent }, MediaRecorder: FakeMediaRecorder }
+  runInContext(MEDIA_RECORDER_SHIM_SCRIPT, createContext(sandbox))
+  return { sandbox, calls, original: FakeMediaRecorder }
+}
+
+interface RecorderInstance {
+  stream: unknown
+  options?: Record<string, unknown>
+}
+
+function recorderOf(sandbox: Record<string, unknown>) {
+  return sandbox.MediaRecorder as unknown as new (stream: unknown, options?: Record<string, unknown>) => RecorderInstance
+}
+
+describe('media recorder mime default', () => {
+  /** WebKitGTK 不指定 mimeType 时录不到数据；补默认类型是该脚本唯一目的。 */
+  it('fills a supported mimeType for default calls in WebKitGTK', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+
+    Reflect.construct(recorderOf(sandbox), ['stream'])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.options).toEqual({ mimeType: 'audio/webm;codecs=opus' })
+  })
+
+  it('keeps explicit options untouched', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+
+    Reflect.construct(recorderOf(sandbox), ['stream', { mimeType: 'audio/ogg;codecs=opus', audioBitsPerSecond: 128000 }])
+
+    expect(calls[0]?.options).toEqual({ mimeType: 'audio/ogg;codecs=opus', audioBitsPerSecond: 128000 })
+  })
+
+  it('preserves other options when adding the mimeType', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+
+    Reflect.construct(recorderOf(sandbox), ['stream', { audioBitsPerSecond: 128000 }])
+
+    expect(calls[0]?.options).toEqual({ audioBitsPerSecond: 128000, mimeType: 'audio/webm;codecs=opus' })
+  })
+
+  it('leaves recorders without isTypeSupported untouched', () => {
+    class BareRecorder {}
+    const sandbox: Record<string, unknown> = { navigator: { userAgent: WEBKITGTK_UA }, MediaRecorder: BareRecorder }
+    runInContext(MEDIA_RECORDER_SHIM_SCRIPT, createContext(sandbox))
+
+    expect(sandbox.MediaRecorder).toBe(BareRecorder)
+  })
+
+  it('treats an empty mimeType as omitted', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+
+    Reflect.construct(recorderOf(sandbox), ['stream', { mimeType: '' }])
+
+    expect(calls[0]?.options).toEqual({ mimeType: 'audio/webm;codecs=opus' })
+  })
+
+  it('keeps native constructor semantics', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+    const Recorder = recorderOf(sandbox)
+    class SubRecorder extends Recorder {}
+    const sub = new SubRecorder('stream')
+
+    expect(sub).toBeInstanceOf(SubRecorder)
+    expect((sandbox.MediaRecorder as unknown as { name: string }).name).toBe('FakeMediaRecorder')
+    expect(() => (Recorder as unknown as (stream: unknown) => unknown)('stream')).toThrow(TypeError)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('does not touch non-WebKitGTK pages', () => {
+    const { sandbox, original } = installRecorder(CHROME_UA)
+
+    expect(recorderOf(sandbox)).toBe(original)
+  })
+
+  it('wraps only once', () => {
+    const { sandbox, calls } = installRecorder(WEBKITGTK_UA)
+    runInContext(MEDIA_RECORDER_SHIM_SCRIPT, createContext(sandbox))
+
+    Reflect.construct(recorderOf(sandbox), ['stream'])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.options).toEqual({ mimeType: 'audio/webm;codecs=opus' })
   })
 })
