@@ -72,6 +72,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-features --locked
 
 [回归测试](<../test/scroll-follow-patch.test.ts>)对比原版与生产替换体；Rust 测试执行真实 `apply_at` 文件产物上的同一套 JavaScript 契约。它们验证逻辑，不代表 M5 / 多屏 GPU 实测，也不覆盖完整浏览器分页界面；性能结论仍需同设备前后对照。
 
+## 聊天跟随锚定
+
+[#1187](https://github.com/dsh-tauri/deepseek-harness-desktop/issues/1187) 报告 macOS WKWebView 里滚动与指针移动慢半拍，同一页面在 Chrome 正常。兼容聊天包用 `[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail])` 决定 `overflow-anchor: none`，跟随期间滚动容器内每次节点移除都会让 WebKit 对整棵会话子树重做选择器匹配。桌面端[补丁](<../src-tauri/src/service/patch/chat_follow_anchor.rs>)在 `ScrollFollow.bind` / `setFollowing` 里把跟随意图镜像到外层 `[data-conversation-scroll]`，规则换成普通属性选择器。同一滚动容器可能有多个跟随实例（主会话、过程分组），属性由仍在前台跟随的实例共同决定，只在结果变化时写；解绑时按剩余实例重算。最佳努力、幂等、锚点缺失跳过与上文一致；[回归测试](<../test/chat-follow-anchor-patch.test.ts>)对原版与补丁后的类跑同一套镜像契约。
+
 ## 运行时隔离
 
 | 模式 | Harness 数据 | Store | 默认回环端口 |

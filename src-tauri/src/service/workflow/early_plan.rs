@@ -254,6 +254,10 @@ pub(super) fn prepare(
             "scroll follow reduced-motion patch",
             patch::scroll_follow::apply_at,
         ),
+        (
+            "chat follow anchor patch",
+            patch::chat_follow_anchor::apply_at,
+        ),
         ("mobile composer patch", patch::mobile_composer::apply_at),
         ("mobile sidebar patch", patch::mobile_sidebar::apply_at),
         ("SessionStore.remove patch", patch::session::apply_at),

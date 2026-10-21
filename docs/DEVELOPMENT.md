@@ -72,6 +72,10 @@ The deployment owns the root attribute. This patch does not disable motion by de
 
 The [regression tests](<../test/scroll-follow-patch.test.ts>) compare the released class with the production replacement; Rust tests run the same JavaScript contract on the actual `apply_at` file output. These are logic checks, not M5 / multi-display GPU measurements or full browser pagination coverage. Performance claims still need a same-device before/after comparison.
 
+## Chat follow anchor
+
+[#1187](https://github.com/dsh-tauri/deepseek-harness-desktop/issues/1187) reports laggy scrolling and pointer movement in macOS WKWebView while the same page is fine in Chrome. The compatible chat bundle keys `overflow-anchor: none` off `[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail])`; WebKit re-runs selector matching over the whole conversation subtree on every node removal inside that scrollport, and the follow path removes and re-inserts nodes continuously. The [patch](<../src-tauri/src/service/patch/chat_follow_anchor.rs>) mirrors the committed follow intent onto the enclosing `[data-conversation-scroll]` from `ScrollFollow.bind`/`setFollowing` and switches the rule to a plain attribute selector. A scrollport can host several followers (main conversation and process groups), so the attribute reflects whether any of them is still following and is written only when that result changes, uses the same best-effort/idempotent/anchor-skip semantics as above, and the [regression tests](<../test/chat-follow-anchor-patch.test.ts>) replay the mirroring contract against the released and patched class.
+
 ## Runtime isolation
 
 | Mode | Harness data | Store | Default loopback port |
