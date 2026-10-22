@@ -237,6 +237,18 @@ describe('mobile conversation layout', () => {
     expect(rules).toHaveLength(1)
   })
 
+  it('hides the tool-row inspect pill whose trajectory view has no way back on phones', () => {
+    expect(declarations('[class$="_inspectButton"]')).toEqual({ display: 'none !important' })
+    const rules: unknown[] = []
+    root.walkRules('[class$="_inspectButton"]', (rule) => {
+      rules.push(rule)
+      expect(rule.parent?.type).toBe('atrule')
+      if (rule.parent?.type === 'atrule')
+        expect(rule.parent.params).toBe(MOBILE_MEDIA)
+    })
+    expect(rules).toHaveLength(1)
+  })
+
   it('overrides conversation scroll bottom padding to zero inside the mobile media query', () => {
     const declarations: unknown[] = []
     root.walkRules('[data-slot="main"] [data-conversation-scroll]', (rule) => {

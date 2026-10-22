@@ -17,6 +17,9 @@ const MARKUP = `<!doctype html><html data-dsh-mobile-ui><body>
   <div data-slot="conversation.composer.bar"><div class="wSkVaW_dock">Queued messages</div></div>
   <div class="wSkVaW_composerStack"><div data-slot="conversation.input.dock"><div class="wSkVaW_dock">Steer panel</div></div></div>
 </body></html>`
+const INSPECT_MARKUP = `<!doctype html><html data-dsh-mobile-ui><body>
+  <button type="button" class="wSkVaW_inspectButton">查看</button>
+</body></html>`
 
 let browser: Browser
 beforeAll(async () => {
@@ -41,6 +44,18 @@ async function layout(viewport: { width: number, height: number }) {
   }
 }
 
+async function inspectDisplay(viewport: { width: number, height: number }) {
+  const page = await browser.newPage({ isMobile: true, hasTouch: true, viewport })
+  try {
+    await page.setContent(INSPECT_MARKUP)
+    await page.addStyleTag({ content: mobileStyle.render() })
+    return await page.locator('[class$="_inspectButton"]').evaluate(element => getComputedStyle(element).display)
+  }
+  finally {
+    await page.close()
+  }
+}
+
 describe('mobile layout on touch devices', () => {
   it('keeps the session header, queue dock and steer dock on a touchscreen desktop window', async () => {
     const { matches, displays } = await layout({ width: 1280, height: 720 })
@@ -59,5 +74,10 @@ describe('mobile layout on touch devices', () => {
   it('switches exactly at the 1024px breakpoint of the official layout', async () => {
     expect((await layout({ width: 1024, height: 720 })).matches, '1024px 与官方布局同门槛，交还桌面').toBe(false)
     expect((await layout({ width: 1023, height: 720 })).matches, '1023px 仍是移动布局').toBe(true)
+  })
+
+  it('hides the tool-row inspect pill only on a phone viewport', async () => {
+    expect(await inspectDisplay({ width: 1280, height: 720 }), '触屏桌面窗口保留官方「查看」').not.toBe('none')
+    expect(await inspectDisplay({ width: 390, height: 844 }), '手机进得了轨迹页却回不了会话，入口必须隐藏').toBe('none')
   })
 })

@@ -48,6 +48,11 @@ export default c([c(`@media ${MOBILE_MEDIA_QUERIES.join(' and ')}`, [
   c('[data-slot="conversation.header"] [class$="_header"]', {
     display: 'none !important',
   }),
+  // 会话头连同视图切换环一起隐藏后，工具行的「查看」只能进轨迹页、回不了会话；它靠 hover 显形，
+  // 触屏点过就常驻，因此在移动布局里整个去掉入口。
+  c('[class$="_inspectButton"]', {
+    display: 'none !important',
+  }),
   // 第三方插件（dsh-better-sidebar）的空白会话兜底入口 `[data-dsh-dock-fallback]` 是
   // `position: fixed` 的：它按宿主会话头里「右侧栏角落控件」的 rect 对齐，而手机版顶栏已经
   // 把那个会话头一并隐藏，锚点 rect 退化成 0×0 之后它会一路退到视口左上角（top/left 各 4px），
