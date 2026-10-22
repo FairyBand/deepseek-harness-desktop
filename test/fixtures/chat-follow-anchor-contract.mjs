@@ -90,6 +90,23 @@ test('without an enclosing conversation scrollport nothing is written', () => {
   assert.deepEqual(port.writes, [])
 })
 
+test('releasing a stale binding still drops its follower', () => {
+  const port = scrollport()
+  const element = {
+    closest: selector => (selector === '[data-conversation-scroll]' ? port : null),
+  }
+  const stale = new ScrollFollow()
+  const unbindStale = stale.bind(element)
+  stale.setFollowing(true)
+  const current = new ScrollFollow()
+  current.bind(element)
+  assert.equal(port.attributes.has(ATTRIBUTE), true)
+  unbindStale()
+  assert.equal(port.attributes.has(ATTRIBUTE), false)
+  current.setFollowing(false)
+  assert.equal(port.attributes.has(ATTRIBUTE), false)
+})
+
 test('one follower leaving the tail keeps the mirror while another follows', () => {
   const shared = scrollport()
   const first = bind({ port: shared })
