@@ -98,10 +98,20 @@ pub async fn test(proxy_url: &str, target: &str, timeout: Duration) -> ProxyTest
     let status = response.status().as_u16();
     let latency_ms = started.elapsed().as_millis() as u64;
     if response.status().is_success() {
-        return ProxyTestResult { ok: true, reason: None, status: Some(status), latency_ms };
+        return ProxyTestResult {
+            ok: true,
+            reason: None,
+            status: Some(status),
+            latency_ms,
+        };
     }
     log::warn!("PROXY_TEST: unexpected status {status}");
-    ProxyTestResult { ok: false, reason: Some("status".to_string()), status: Some(status), latency_ms }
+    ProxyTestResult {
+        ok: false,
+        reason: Some("status".to_string()),
+        status: Some(status),
+        latency_ms,
+    }
 }
 
 /// 子进程代理环境（issue #110）：把配置页的代理地址翻译成核心与插件子进程能读的
@@ -129,6 +139,19 @@ pub fn proxy_child_env(value: &str) -> HashMap<String, String> {
         ("https_proxy".to_string(), url),
         ("no_proxy".to_string(), child_no_proxy()),
     ])
+}
+
+// 仅补继承的 HTTP(S) 代理：单独注入 no_proxy 会让 GIO 改选环境 resolver，覆盖系统/PAC 代理。
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn prepare_inherited_proxy() {
+    if ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        let bypass = child_no_proxy();
+        std::env::set_var("no_proxy", &bypass);
+        std::env::set_var("NO_PROXY", bypass);
+    }
 }
 
 /// 子进程的代理绕过列表：固定回环条目加上进程已有的 `NO_PROXY` / `no_proxy`。
@@ -341,11 +364,192 @@ mod tests {
         let envs = proxy_child_env("socks5h://127.0.0.1:1080");
         assert!(envs["http_proxy"].starts_with("socks5h://127.0.0.1:1080"));
         let entries = envs["no_proxy"].split(',').collect::<Vec<_>>();
-        for entry in ["localhost", ".localhost", "127.0.0.1", "127.0.0.0/8", "::1", "[::1]"] {
+        for entry in [
+            "localhost",
+            ".localhost",
+            "127.0.0.1",
+            "127.0.0.0/8",
+            "::1",
+            "[::1]",
+        ] {
             assert!(entries.contains(&entry), "missing {entry}");
         }
         assert!(!envs.contains_key("all_proxy"));
         assert!(!envs.contains_key("NODE_USE_ENV_PROXY"));
+    }
+
+    #[test]
+    fn inherited_proxy_startup_preserves_remote_routes_and_bypasses_loopback() {
+        for mode in ["absent", "proxy"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "config::proxy::tests::inherited_proxy_startup_child",
+                "--nocapture",
+            ]);
+            for key in [
+                "http_proxy",
+                "HTTP_PROXY",
+                "https_proxy",
+                "HTTPS_PROXY",
+                "all_proxy",
+                "ALL_PROXY",
+                "no_proxy",
+                "NO_PROXY",
+            ] {
+                command.env_remove(key);
+            }
+            command.env("DSH_TEST_INHERITED_PROXY", mode);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("INHERITED_PROXY_VERIFIED"));
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_proxy_startup_child() {
+        let Ok(mode) = std::env::var("DSH_TEST_INHERITED_PROXY") else {
+            return;
+        };
+        if mode == "absent" {
+            prepare_inherited_proxy();
+            assert!(std::env::var_os("no_proxy").is_none());
+            assert!(std::env::var_os("NO_PROXY").is_none());
+            println!("INHERITED_PROXY_VERIFIED");
+            return;
+        }
+        let direct = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = direct.local_addr().unwrap();
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+        std::env::set_var("http_proxy", &proxy_url);
+        std::env::set_var("https_proxy", &proxy_url);
+        std::env::set_var("no_proxy", "corp.example");
+        let recording_proxy = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = proxy.accept().await.unwrap();
+                requests.push(read_headers(&mut stream).await);
+                stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            }
+            requests
+        });
+        let local_server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = direct.accept().await.unwrap();
+                let request = read_headers(&mut stream).await;
+                if request.starts_with("GET /ws ") {
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("upgrade: websocket\r\n"));
+                    stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n").await.unwrap();
+                    let mut ping = [0; 6];
+                    stream.read_exact(&mut ping).await.unwrap();
+                    assert_eq!(ping, [0x89, 0x80, 1, 2, 3, 4]);
+                    stream.write_all(&[0x8a, 0]).await.unwrap();
+                } else {
+                    assert!(request.starts_with("GET /health "));
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\ndirect").await.unwrap();
+                }
+            }
+        });
+        let client = || {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap()
+        };
+        let websocket = |client: &reqwest::Client| {
+            client
+                .get(format!("http://{address}/ws"))
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        };
+        let before = client();
+        assert_eq!(
+            before
+                .get(format!("http://{address}/health"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            502
+        );
+        assert_eq!(websocket(&before).send().await.unwrap().status(), 502);
+        prepare_inherited_proxy();
+        assert_eq!(std::env::var("http_proxy").unwrap(), proxy_url);
+        assert_eq!(std::env::var("https_proxy").unwrap(), proxy_url);
+        for key in ["no_proxy", "NO_PROXY"] {
+            assert!(std::env::var(key)
+                .unwrap()
+                .split(',')
+                .any(|entry| entry == "corp.example"));
+        }
+        let after = client();
+        assert_eq!(
+            after
+                .get(format!("http://{address}/health"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "direct"
+        );
+        let response = websocket(&after).send().await.unwrap();
+        assert_eq!(
+            response.status(),
+            101,
+            "loopback WebSocket handshake must bypass the inherited proxy"
+        );
+        let mut socket = response.upgrade().await.unwrap();
+        socket.write_all(&[0x89, 0x80, 1, 2, 3, 4]).await.unwrap();
+        let mut pong = [0; 2];
+        tokio::time::timeout(Duration::from_secs(3), socket.read_exact(&mut pong))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pong, [0x8a, 0]);
+        assert_eq!(
+            after
+                .get("http://dsh-proxy-test.invalid/remote")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            502
+        );
+        assert!(after
+            .get("https://dsh-proxy-test.invalid/remote")
+            .send()
+            .await
+            .is_err());
+        let requests = tokio::time::timeout(Duration::from_secs(3), recording_proxy)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(requests[0].starts_with(&format!("GET http://{address}/health HTTP/1.1\r\n")));
+        assert!(requests[1].starts_with(&format!("GET http://{address}/ws HTTP/1.1\r\n")));
+        assert!(requests[2].starts_with("GET http://dsh-proxy-test.invalid/remote HTTP/1.1\r\n"));
+        assert!(requests[3].starts_with("CONNECT dsh-proxy-test.invalid:443 HTTP/1.1\r\n"));
+        tokio::time::timeout(Duration::from_secs(3), local_server)
+            .await
+            .unwrap()
+            .unwrap();
+        println!("INHERITED_PROXY_VERIFIED");
     }
 
     #[test]
@@ -357,7 +561,10 @@ mod tests {
         assert!(entries.contains(&".corp.example"));
         assert!(entries.contains(&"10.0.0.0/8"));
         assert_eq!(
-            entries.iter().filter(|entry| **entry == "localhost").count(),
+            entries
+                .iter()
+                .filter(|entry| **entry == "localhost")
+                .count(),
             1
         );
         assert!(entries.contains(&"127.0.0.1-127.255.255.255"));
@@ -485,7 +692,9 @@ mod tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             read_headers(&mut stream).await;
             stream
-                .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .await
                 .unwrap();
         });
@@ -531,7 +740,10 @@ mod tests {
         .await;
         assert!(!result.ok, "{result:?}");
         assert!(
-            matches!(result.reason.as_deref(), Some("connect" | "timeout" | "request")),
+            matches!(
+                result.reason.as_deref(),
+                Some("connect" | "timeout" | "request")
+            ),
             "{result:?}"
         );
     }

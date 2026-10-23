@@ -27,6 +27,8 @@ pub fn run() -> Result<(), String> {
         eprintln!("STARTUP_PATH_RESTORE_FAILED: {error}");
     }
     desktop::startup::verify()?;
+    #[cfg(target_os = "linux")]
+    config::proxy::prepare_inherited_proxy();
     // Wayland EGL workaround：仅 AppImage 需要（见 `should_apply_wayland_egl_workaround`）。
     if should_apply_wayland_egl_workaround(
         &std::env::var("XDG_SESSION_TYPE").unwrap_or_default(),
