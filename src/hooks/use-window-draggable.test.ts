@@ -28,7 +28,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 const windowMock = vi.hoisted(() => ({
   outerPosition: vi.fn<() => Promise<{ x: number, y: number }>>(),
   setPosition: vi.fn<(position: { x: number, y: number }) => Promise<void>>(),
-  startDragging: vi.fn<() => Promise<void>>(),
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -65,13 +64,11 @@ function useDraggable(options: Partial<UseWindowDraggableOptions> = {}): UseWind
 }
 
 /** 造一个命中箱指针事件：hook 只用按钮/指针 id/主指针标记。 */
-function pointerEvent(options: { button?: number, isPrimary?: boolean, pointerId?: number, screenX?: number, screenY?: number } = {}): ReactPointerEvent<HTMLDivElement> {
+function pointerEvent(options: { button?: number, isPrimary?: boolean, pointerId?: number } = {}): ReactPointerEvent<HTMLDivElement> {
   return {
     button: options.button ?? 0,
     pointerId: options.pointerId ?? 1,
     isPrimary: options.isPrimary ?? true,
-    screenX: options.screenX ?? 0,
-    screenY: options.screenY ?? 0,
   } as unknown as ReactPointerEvent<HTMLDivElement>
 }
 
@@ -151,8 +148,6 @@ beforeEach(() => {
   windowMock.outerPosition.mockResolvedValue({ x: BASE.x, y: BASE.y })
   windowMock.setPosition.mockReset()
   windowMock.setPosition.mockResolvedValue(undefined)
-  windowMock.startDragging.mockReset()
-  windowMock.startDragging.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -163,35 +158,6 @@ afterEach(() => {
 })
 
 describe('useWindowDraggable', () => {
-  it('设备流缺席时指针走远就回退到系统拖拽', async () => {
-    const onRelease = vi.fn()
-    const { result } = renderHook(() => useDraggable({ onRelease }))
-
-    await press(result.current)
-    act(() => {
-      result.current.onPointerMove(pointerEvent({ screenX: 10 }))
-    })
-    expect(windowMock.startDragging).not.toHaveBeenCalled()
-    act(() => {
-      result.current.onPointerMove(pointerEvent({ screenX: 40 }))
-    })
-
-    expect(windowMock.startDragging).toHaveBeenCalledOnce()
-    expect(onRelease).toHaveBeenCalledOnce()
-    expect(windowMock.setPosition).not.toHaveBeenCalled()
-  })
-
-  it('设备流在线时不回退到系统拖拽', async () => {
-    const { result } = renderHook(() => useDraggable())
-
-    await startDrag(result.current, 2)
-    act(() => {
-      result.current.onPointerMove(pointerEvent({ screenX: 40 }))
-    })
-
-    expect(windowMock.startDragging).not.toHaveBeenCalled()
-  })
-
   it('门槛内不移动窗口：位移不足时按单击处理', async () => {
     const { result } = renderHook(() => useDraggable())
 

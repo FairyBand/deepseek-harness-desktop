@@ -34,8 +34,6 @@ export interface UseWindowDraggableResult {
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
   /** 命中箱 pointerup（`<Pet>` 的 `onHitboxPointerUp`）：指针侧即时收尾。 */
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void
-  /** 命中箱 pointermove（`<Pet>` 的 `onHitboxPointerMove`）：设备流缺席时回退到系统拖拽。 */
-  onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void
 }
 
 /** 拖拽钩子的夹取与回调。 */
@@ -90,12 +88,6 @@ const MAX_SUBSTEP = 1 / 120
 const DRAG_DIRECTION_IDLE_TIMEOUT = 350
 /** 会话兜底阈值：超过此时长没有新的光标样本，且左键状态未知/已松开时收尾拖拽。 */
 const DRAG_SESSION_TIMEOUT = 1500
-/**
- * 系统拖拽回退门槛（CSS px）：指针已走出这段距离、设备流仍没有一个样本，判定设备流缺席
- * （Wayland 会话下 XRecord 可能拿不到抓取期间的指针事件，issue #649）。取手势门槛的数倍，
- * 给 16ms 节流的设备流留出送达时间。
- */
-const DRAG_FALLBACK_THRESHOLD = DRAG_START_THRESHOLD * 4
 
 /** 一次拖拽手势的状态（位置/速度与窗口、光标流同一坐标系：虚拟屏幕物理像素）。 */
 interface Gesture {
@@ -114,10 +106,6 @@ interface Gesture {
   /** 是否越过手势门槛（门槛前窗口不动，位移由门槛后的弹簧按原点补齐）。 */
   engaged: boolean
   directionAnchor: { x: number, y: number } | undefined
-  /** 按下后设备流是否送达过样本。 */
-  sampled: boolean
-  /** 按下时的 DOM 屏幕坐标（CSS px），只用于判定系统拖拽回退。 */
-  press: { x: number, y: number }
 }
 
 /**
@@ -310,8 +298,6 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
       vy: 0,
       engaged: false,
       directionAnchor: latest === undefined ? undefined : { x: latest.x, y: latest.y },
-      sampled: false,
-      press: { x: event.screenX, y: event.screenY },
     }
     gestureRef.current = gesture
     // 按下即开始兜底计时：设备流与指针事件同时中断时也能收尾。
@@ -329,17 +315,6 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
     })
   }
 
-  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
-    const gesture = gestureRef.current
-    if (gesture === null || gesture.pointerId !== event.pointerId || gesture.sampled || gesture.engaged)
-      return
-    if (Math.hypot(event.screenX - gesture.press.x, event.screenY - gesture.press.y) < DRAG_FALLBACK_THRESHOLD)
-      return
-    // 系统拖拽接管指针后收不到 pointerup，立即收尾；位置由窗口 Moved 落盘。
-    endDrag()
-    void getCurrentWindow().startDragging().catch(() => {})
-  }
-
   function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
     if (event.button !== 0 || gestureRef.current?.pointerId !== event.pointerId)
       return
@@ -351,7 +326,6 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
     const gesture = gestureRef.current
     if (gesture === null)
       return
-    gesture.sampled = true
     // 事件流仍在推进：重置「会话兜底」计时。
     armSessionTimer()
     if (gesture.anchor === undefined) {
@@ -400,6 +374,5 @@ export function useWindowDraggable(options: UseWindowDraggableOptions): UseWindo
     direction,
     onPointerDown: handlePointerDown,
     onPointerUp: handlePointerUp,
-    onPointerMove: handlePointerMove,
   }
 }
