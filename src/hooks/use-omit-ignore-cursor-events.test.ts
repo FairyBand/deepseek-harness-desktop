@@ -11,7 +11,9 @@ const native = vi.hoisted(() => ({
   moved: vi.fn(),
   resized: vi.fn(),
   label: 'pet',
+  os: 'windows',
 }))
+vi.mock('@tauri-apps/plugin-os', () => ({ type: () => native.os }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }))
 vi.mock('@tauri-apps/api/window', () => ({
@@ -71,6 +73,7 @@ beforeEach(() => {
   handlers.clear()
   disposers.length = 0
   native.label = 'pet'
+  native.os = 'windows'
   native.position.mockResolvedValue({ x: 100, y: 100 })
   native.visible.mockResolvedValue(true)
   native.moved.mockImplementation(handler => subscribe('moved', handler))
@@ -89,6 +92,22 @@ afterEach(() => {
 })
 
 describe('pet cursor input lifecycle', () => {
+  it('shapes the linux input region to the hitbox instead of toggling click-through', async () => {
+    native.os = 'linux'
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    })
+    renderHook(() => useOmitIgnoreCursorEvents({ current: element }))
+    await flush()
+    await emit('device-mouse-move', { x: 500, y: 500 })
+    await emit('device-mouse-move', { x: 120, y: 120 })
+    expect(requests()).toEqual([])
+    const regions = native.invoke.mock.calls.filter(([command]) => command === 'set_pet_input_region')
+    expect(regions).toEqual([['set_pet_input_region', { rect: { x: 10, y: 10, width: 100, height: 100 } }]])
+    expect(native.invoke).toHaveBeenCalledWith('start_pet_mouse_stream')
+  })
+
   it('applies outside and inside hit tests without duplicate native writes', async () => {
     renderHook(() => useOmitIgnoreCursorEvents({ current: element }))
     await flush()

@@ -83,6 +83,7 @@ export function App() {
           hitboxRef={hitboxRef}
           onHitboxPointerDown={draggable.onPointerDown}
           onHitboxPointerUp={draggable.onPointerUp}
+          onHitboxPointerMove={draggable.onPointerMove}
           onError={reportPetAssetError}
         />
       )}
