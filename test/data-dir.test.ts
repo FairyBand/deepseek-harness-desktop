@@ -75,6 +75,15 @@ describe('data directory backend contract', () => {
     }
   })
 
+  it('restores persisted Windows home before any startup path resolution', () => {
+    const source = readSource('src-tauri/src/lib.rs')
+    const restore = source.indexOf('service::data_dir::restore_process_env();')
+    expect(restore).toBeGreaterThan(-1)
+    expect(restore).toBeLessThan(source.indexOf('service::workflow::early::Startup::begin('))
+    expect(restore).toBeLessThan(source.indexOf('desktop::builder()'))
+    expect(readSource(MODULE)).toMatch(/#\[cfg\(windows\)\]\s*env::restore_process_env\(env::read_user_home\(\)\);/)
+  })
+
   it('keeps the user-level DSH_HOME as the single source of truth', () => {
     expect(readSource(ENV)).toContain('pub(super) const DATA_DIR_ENV: &str = "DSH_HOME";')
     expect(readSource(ENV)).toContain('read_user_env(DATA_DIR_ENV)')

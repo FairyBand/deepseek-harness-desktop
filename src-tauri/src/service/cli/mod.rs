@@ -31,7 +31,9 @@ pub use core::{ensure, ensure_shims, get_status, remove, CliLinkStatus};
 #[cfg(windows)]
 pub(crate) use path::find_user_pnpm_executable;
 #[cfg(windows)]
-pub(crate) use path::{delete_user_env, notify_environment_change, read_user_env, write_user_env};
+pub(crate) use path::{
+    delete_user_env, expand_env, notify_environment_change, read_user_env, write_user_env,
+};
 pub use path::{find_user_pnpm, get_bin_dir, pnpm_env_value};
 pub(crate) use path::{find_user_pnpm_from, get_bin_dir_from};
 #[cfg(unix)]

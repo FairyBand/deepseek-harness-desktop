@@ -221,7 +221,7 @@ pub(crate) fn notify_environment_change() {
 }
 
 /// 展开字符串中的 %VAR%（Windows）
-fn expand_env(value: &str) -> String {
+pub(crate) fn expand_env(value: &str) -> String {
     use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
     let wide = to_wide_null(value);
     let mut buf = vec![0u16; 32768];

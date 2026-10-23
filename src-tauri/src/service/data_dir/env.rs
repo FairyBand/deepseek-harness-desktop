@@ -38,6 +38,15 @@ pub(super) fn read_user_home() -> Result<Option<String>, String> {
     Ok(normalize(crate::service::cli::read_user_env(DATA_DIR_ENV)?))
 }
 
+#[cfg(windows)]
+pub(super) fn restore_process_env(persisted: Result<Option<String>, String>) {
+    match persisted {
+        Ok(Some(value)) => std::env::set_var(DATA_DIR_ENV, crate::service::cli::expand_env(&value)),
+        Ok(None) => {}
+        Err(error) => log::warn!("DATA_DIR_ENV_READ: {error}"),
+    }
+}
+
 /// Unix：值可能来自进程环境、~/.profile 的标记块或平台自己的会话文件
 /// （macOS LaunchAgent / Linux environment.d），三者由 unix_env 统一处理。
 #[cfg(not(windows))]
@@ -199,6 +208,72 @@ fn normalize(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn persisted_home_restores_in_an_isolated_process() {
+        use std::os::windows::process::CommandExt;
+        for mode in [
+            "missing", "stale", "expanded", "unset", "empty", "blank", "default", "error",
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "service::data_dir::env::tests::persisted_home_restore_child",
+                    "--nocapture",
+                ])
+                .env("DSH_TEST_HOME_RESTORE", mode)
+                .env_remove(DATA_DIR_ENV)
+                .creation_flags(0x08000000)
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "home restoration failed: {mode}");
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("home restoration timed out: {mode}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persisted_home_restore_child() {
+        let Ok(mode) = std::env::var("DSH_TEST_HOME_RESTORE") else {
+            return;
+        };
+        let migrated = "E:\\DSH 数据\\DSHHome";
+        let inherited = "D:\\Old Home";
+        std::env::set_var("DSH_TEST_EXPAND_ROOT", "E:\\DSH 数据");
+        let persisted = match mode.as_str() {
+            "missing" | "stale" => Ok(Some(migrated.to_string())),
+            "expanded" => Ok(Some("%DSH_TEST_EXPAND_ROOT%\\DSHHome".to_string())),
+            "empty" => Ok(normalize(Some(String::new()))),
+            "blank" => Ok(normalize(Some("   ".to_string()))),
+            "error" => Err("REG_QUERY_FAILED: isolated failure".to_string()),
+            "unset" | "default" => Ok(None),
+            _ => panic!("unknown home restoration mode: {mode}"),
+        };
+        if mode == "expanded" {
+            std::env::set_var(DATA_DIR_ENV, migrated);
+        } else if mode != "missing" && mode != "default" {
+            std::env::set_var(DATA_DIR_ENV, inherited);
+        }
+        restore_process_env(persisted);
+        let expected = match mode.as_str() {
+            "missing" | "stale" | "expanded" => Some(migrated.into()),
+            "default" => None,
+            _ => Some(inherited.into()),
+        };
+        assert_eq!(std::env::var_os(DATA_DIR_ENV), expected, "mode: {mode}");
+    }
 
     #[test]
     fn normalize_treats_blank_as_unset() {
