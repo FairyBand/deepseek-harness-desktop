@@ -6,9 +6,10 @@
  * （档位推导、子代理静默、终态只下发一次、挂载前被丢弃的气泡能靠 flush 补齐）。
  */
 import type { PetBubbleHandle, PetBubbleOptions } from 'dsh-pet-component'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setPetLanguage } from '../i18n'
+
 import { createBubbleTracker } from './use-bubble-tracker'
-import { UNTITLED_SESSION_TITLE } from './use-bubble-tracker.constants'
 import {
   activityCopy,
   seedNumber,
@@ -17,6 +18,9 @@ import {
   taskCopy,
   toolActivityGroup,
 } from './use-bubble-tracker.helpers'
+
+beforeEach(() => setPetLanguage('zh'))
+afterEach(() => setPetLanguage('en'))
 
 describe('seedNumber', () => {
   it('numeric strings resolve to the absolute truncated integer', () => {
@@ -128,10 +132,10 @@ describe('sessionTitle', () => {
 
   it('falls back to the untitled label instead of leaking the internal session id', () => {
     const title = sessionTitle({ id: 'session-2a2abd15-b0d4-499c-aed1-dd1424003bb3' })
-    expect(title).toBe(UNTITLED_SESSION_TITLE)
+    expect(title).toBe('新会话')
     expect(title).not.toContain('session-')
     // 空白标题与缺失标题同档：都不得回落到 id。
-    expect(sessionTitle({ title: '   ', displayTitle: '' })).toBe(UNTITLED_SESSION_TITLE)
+    expect(sessionTitle({ title: '   ', displayTitle: '' })).toBe('新会话')
   })
 
   it('keeps the attention prefixes on top of the untitled fallback', () => {
@@ -139,8 +143,8 @@ describe('sessionTitle', () => {
       const expected = phase === 'approval' ? '需授权 · 会话' : '需选择 · 会话'
       expect(sessionTitle({ phase, title: '会话' })).toBe(expected)
     }
-    expect(sessionTitle({ phase: 'approval' })).toContain(UNTITLED_SESSION_TITLE)
-    expect(sessionTitle({ origin: 'subagent' })).toContain(UNTITLED_SESSION_TITLE)
+    expect(sessionTitle({ phase: 'approval' })).toContain('新会话')
+    expect(sessionTitle({ origin: 'subagent' })).toContain('新会话')
   })
 })
 

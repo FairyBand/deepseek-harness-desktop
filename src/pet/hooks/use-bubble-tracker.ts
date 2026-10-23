@@ -1,12 +1,13 @@
 import type { Motion, PetBubbleHandle, PetRef } from 'dsh-pet-component'
 import type { BubbleSession } from './use-bubble-tracker.helpers'
 import type { PetSource } from './use-pet-source'
-import { useUnmount, useWatch } from '@reause/core'
+import { useMount, useUnmount, useWatch } from '@reause/core'
+import { invoke } from '@tauri-apps/api/core'
 import { useRef } from 'react'
 import { useListen } from '@/hooks/use-listen'
+import { petI18n, setPetLanguage } from '../i18n'
 import {
   DONE_BUBBLE_TIMEOUT,
-  pickLang,
   TERMINAL_MOTIONS,
 } from './use-bubble-tracker.constants'
 import {
@@ -31,6 +32,35 @@ export function useBubbleTracker(pet: PetRef, source?: PetSource | null) {
   const trackerRef = useRef<BubbleTracker | null>(null)
   trackerRef.current ??= createBubbleTracker(pet.bubble)
   const tracker = trackerRef.current
+  const languageRevisionRef = useRef(0)
+
+  function updateLanguage(language?: string | null): void {
+    const previous = petI18n.language
+    setPetLanguage(language)
+    if (previous !== petI18n.language)
+      tracker.flush()
+  }
+
+  useListen<{ language?: string | null }>('setting_updated', ({ payload }) => {
+    languageRevisionRef.current++
+    updateLanguage(payload.language)
+  })
+  useMount(() => {
+    const revision = languageRevisionRef.current
+    void invoke<{ language?: string | null }>('get_app_config')
+      .then((setting) => {
+        if (revision === languageRevisionRef.current)
+          updateLanguage(setting.language)
+      })
+      .catch((error) => {
+        console.warn('[pet] failed to load language:', error)
+        if (revision === languageRevisionRef.current)
+          updateLanguage()
+      })
+  })
+  useUnmount(() => {
+    languageRevisionRef.current++
+  })
 
   useWatch(source !== null, (ready) => {
     if (ready)
@@ -76,7 +106,7 @@ export function createBubbleTracker(bubble: PetBubbleHandle): BubbleTracker {
         bubble({
           id: `${id}:done`,
           title: sessionTitle(session).trim(),
-          description: pickLang('已完成', 'Done'),
+          description: petI18n.t('pet.bubble.done'),
           variant: 'success',
           timeout: DONE_BUBBLE_TIMEOUT,
         })
