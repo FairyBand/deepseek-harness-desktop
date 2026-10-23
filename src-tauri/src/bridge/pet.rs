@@ -770,6 +770,71 @@ pub fn set_pet_ignore_cursor_events(window: WebviewWindow, ignore: bool) -> Resu
     Ok(ignore)
 }
 
+/// 桌宠可交互区域（窗口内 CSS px，与 GTK 逻辑坐标一致）。
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct PetInputRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Linux 下把 pet 窗口的输入形状收缩到宠物本体，取代整窗穿透切换（issue #649）。
+///
+/// 整窗穿透依赖全局鼠标流判定光标是否回到宠物上；Wayland 会话里 XWayland 只在光标
+/// 落在 X11 窗口上时才收到指针事件，窗口一旦穿透，XRecord 就再也拿不到坐标，桌宠永远
+/// 点不到。输入形状由 X server / 合成器直接命中测试，不需要任何鼠标流。tao 的
+/// `set_ignore_cursor_events` 本身也是改写同一份输入形状，因此两条路径不能混用。
+/// `gtk_widget_input_shape_combine_region` 在未 realize 的窗口上只暂存、realize 时生效，
+/// 不受 issue #437 的 unwrap 影响。
+#[tauri::command]
+pub fn set_pet_input_region(window: WebviewWindow, rect: PetInputRect) -> Result<(), String> {
+    if window.label() != pet_window::PET_WINDOW_LABEL {
+        return Err(
+            "PET_WINDOW_LABEL_MISMATCH: this command is restricted to the pet window".to_string(),
+        );
+    }
+    if !(rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.width.is_finite()
+        && rect.height.is_finite())
+    {
+        return Err("PET_INPUT_REGION_INVALID: rect must be finite".to_string());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let target = window.clone();
+        window
+            .run_on_main_thread(move || apply_pet_input_region(&target, rect))
+            .map_err(|error| format!("PET_INPUT_REGION_FAILED: {error}"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("PET_INPUT_REGION_UNSUPPORTED: input region is only used on Linux".to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn apply_pet_input_region(window: &WebviewWindow, rect: PetInputRect) {
+    use gtk::prelude::WidgetExt;
+
+    let gtk_window = match window.gtk_window() {
+        Ok(gtk_window) => gtk_window,
+        Err(error) => {
+            log::warn!("PET_INPUT_REGION_FAILED: {error}");
+            return;
+        }
+    };
+    let left = rect.x.floor() as i32;
+    let top = rect.y.floor() as i32;
+    let width = ((rect.x + rect.width).ceil() as i32 - left).max(0);
+    let height = ((rect.y + rect.height).ceil() as i32 - top).max(0);
+    let region = gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(
+        left, top, width, height,
+    ));
+    gtk_window.input_shape_combine_region(Some(&region));
+}
+
 /// 返回来源对应的真实目录；chat 直接使用 `$DSH_HOME/pets`，codex 直接使用
 /// 用户主目录下的 `.codex/pets`，均不经过应用 AppData。
 fn pets_dir(app: &AppHandle, source: PetSource) -> Result<PathBuf, String> {

@@ -3,11 +3,19 @@ import { useWatch } from '@reause/core'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { type } from '@tauri-apps/plugin-os'
 import { useEffect, useRef } from 'react'
 
 interface DeviceMousePosition {
   x: number
   y: number
+}
+
+interface PetInputRect {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 interface RustPetStatus {
@@ -27,6 +35,10 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
     const appWindow = getCurrentWindow()
     if (appWindow.label !== 'pet')
       return
+    // Linux 走输入形状而非整窗穿透：XWayland 下穿透后收不到全局鼠标流，桌宠再也点不到（issue #649）。
+    const inputRegion = type() === 'linux'
+    let appliedRegion: PetInputRect | undefined
+    let regionFrame: number | undefined
     let disposed = false
     let appliedIgnore: boolean | undefined = false
     let desiredIgnore = false
@@ -56,8 +68,33 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
       })
     }
 
+    function applyInputRegion(): void {
+      regionFrame = undefined
+      const element = elementRef.current
+      if (disposed || element === null)
+        return
+      const { x, y, width, height } = element.getBoundingClientRect()
+      const rect = { x, y, width, height }
+      if (appliedRegion !== undefined && appliedRegion.x === x && appliedRegion.y === y && appliedRegion.width === width && appliedRegion.height === height)
+        return
+      appliedRegion = rect
+      void invoke('set_pet_input_region', { rect }).catch((error) => {
+        appliedRegion = undefined
+        console.warn('[pet] PET_INPUT_UPDATE_FAILED:', error)
+      })
+    }
+
+    function scheduleInputRegion(): void {
+      if (regionFrame === undefined)
+        regionFrame = requestAnimationFrame(applyInputRegion)
+    }
+
     function handleVisibility(visible: boolean): void {
       windowVisible = visible
+      if (inputRegion) {
+        scheduleInputRegion()
+        return
+      }
       if (visible)
         refreshFromState()
       else
@@ -95,6 +132,10 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
     function refreshFromState(): void {
       if (disposed)
         return
+      if (inputRegion) {
+        scheduleInputRegion()
+        return
+      }
       if (draggingRef.current) {
         setIgnoreCursorEvents(false)
         return
@@ -108,6 +149,8 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
     }
     refreshRef.current = refreshFromState
 
+    const regionObserver = inputRegion ? new MutationObserver(scheduleInputRegion) : undefined
+    regionObserver?.observe(document.body, { childList: true, subtree: true, attributes: true })
     void refreshWindowPosition()
     const initialVisibilityRevision = visibilityRevision
     void appWindow.isVisible().then((visible) => {
@@ -147,6 +190,9 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
 
     return () => {
       disposed = true
+      regionObserver?.disconnect()
+      if (regionFrame !== undefined)
+        cancelAnimationFrame(regionFrame)
       refreshRef.current = () => {}
       geometryRevision++
       for (const unlisten of unlisteners)

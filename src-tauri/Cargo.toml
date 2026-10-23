@@ -156,6 +156,8 @@ libc = "0.2"
 # tray-icon 0.25 / muda 0.20，托盘本身走 `tauri::tray`。
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = { version = "0.25", default-features = false, features = [ "ksni" ] }
+# 桌宠输入区域（issue #649）：直接调 GTK 设置窗口输入形状，版本与 tauri 所用 gtk 0.18 对齐。
+gtk = "0.18"
 
 # E2E 基础设施：上游 `tauri-plugin-wdio-webdriver` 的帧上下文靠 JS 模拟
 # （`frame.contentWindow.eval`）。壳层是 `tauri://localhost`，内嵌 dsh 是
