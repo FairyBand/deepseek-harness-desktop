@@ -17,9 +17,15 @@ pub fn patch_core_dir(core_dir: &std::path::Path) -> Result<(), String> {
     service::patch::apply_all_at(core_dir)
 }
 
-/// 应用入口：先做 Wayland 环境兼容，再初始化日志、装配桌面端并进入事件循环。
 pub fn run() -> Result<(), String> {
     let started = std::time::Instant::now();
+    #[cfg(unix)]
+    if let Err(error) = std::env::current_exe()
+        .map_err(|error| error.to_string())
+        .and_then(|executable| desktop::login_path::restore(&executable))
+    {
+        eprintln!("STARTUP_PATH_RESTORE_FAILED: {error}");
+    }
     desktop::startup::verify()?;
     // Wayland EGL workaround：仅 AppImage 需要（见 `should_apply_wayland_egl_workaround`）。
     if should_apply_wayland_egl_workaround(
