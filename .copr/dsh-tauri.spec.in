@@ -10,7 +10,7 @@
 
 Name:           dsh-tauri
 Version:        @VERSION@
-Release:        1%{?dist}
+Release:        @RELEASE@%{?dist}
 Summary:        Desktop application for DeepSeek Harness
 License:        MIT
 URL:            https://github.com/FairyBand/deepseek-harness-desktop
@@ -105,4 +105,4 @@ EOF
 
 %changelog
 * @DATE@ @PACKAGER@ - %{version}-%{release}
-- Automated Copr build
+- Copr release build
