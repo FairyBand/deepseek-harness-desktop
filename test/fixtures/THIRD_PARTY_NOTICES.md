@@ -2,6 +2,10 @@
 
 [`scroll-follow-alpha5.txt`](<./scroll-follow-alpha5.txt>) is the `ScrollFollow` class extracted from `@deepseek-ai/dsh-client-ui-chat@0.2.1-alpha.5`, `lib/client.js`, with comments and blank lines removed. Source: [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-alpha.5/packages/client/ui-chat/src/client/chat/use-scroll-follow.ts). This fixture does not change the read-only reference submodule.
 
+## Permission settings fixture
+
+[`permission-settings-rc2.txt`](<./permission-settings-rc2.txt>) contains `permissionDefaultOf` and `PermissionPresetSettingsController` extracted from `@deepseek-ai/dsh-client-ui-permission-presets@0.2.0-rc.2`, `lib/client.js`, with comments and blank lines removed and outer indentation normalized. Source: [npm package](https://www.npmjs.com/package/@deepseek-ai/dsh-client-ui-permission-presets/v/0.2.0-rc.2).
+
 ## MIT License
 
 Copyright (c) 2026 DeepSeek

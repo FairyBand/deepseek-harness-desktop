@@ -29,13 +29,10 @@ mod state;
 #[cfg(unix)]
 mod unix_env;
 
-/// 应用启动时把持久化的 `DSH_HOME` 注入本进程（Unix 的实现见 [`unix_env`]；
-/// Windows 走注册表，进程启动时已经拿到值，这里是空操作）。
-///
-/// 必须在任何 `config::get_dsh_data_path` 调用之前执行：macOS / Linux 上由
-/// launchd 或显示管理器启动的 GUI 应用拿不到登录 shell 的环境变量，迁移过的
-/// 数据目录只能靠这一步回到进程里，否则会「迁移成功但重启后又读旧目录」。
+/// issue #1195：Windows 启动器可能继承旧环境，须在解析数据目录前恢复持久化值。
 pub fn restore_process_env() {
+    #[cfg(windows)]
+    env::restore_process_env(env::read_user_home());
     #[cfg(unix)]
     unix_env::restore_process_env();
 }

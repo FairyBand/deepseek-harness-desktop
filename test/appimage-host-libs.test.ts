@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -142,28 +142,70 @@ describe('appimage host-interface library exclusion (#620)', () => {
   })
 })
 
-describe('appimage GTK backend selection (#789)', () => {
-  it.skipIf(process.platform !== 'linux').each([false, true])('repacks GTK hook (bundled host library: %s), preserves backends, and is idempotent', (bundledHostLibrary) => {
+describe('appimage host stack selection (#789, #1209)', () => {
+  it('uses the host GStreamer instead of additionally bundling the build-system media framework', () => {
+    const config = JSON.parse(readFileSync(fileURLToPath(new URL('../src-tauri/tauri.conf.json', import.meta.url)), 'utf8'))
+    expect(config.bundle.linux.appimage.bundleMediaFramework).toBe(false)
+    expect(config.bundle.linux.deb.depends).toEqual(expect.arrayContaining(['gstreamer1.0-plugins-good', 'gstreamer1.0-plugins-bad']))
+  })
+
+  it.skipIf(process.platform !== 'linux').each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])('repacks host libraries: %s, media stack: %s, and is idempotent', (bundledHostLibrary, bundledMedia) => {
     const work = mkdtempSync(join(tmpdir(), 'dsh-appimage-'))
     try {
       const tree = join(work, 'AppDir')
       mkdirSync(join(tree, 'apprun-hooks'), { recursive: true })
       mkdirSync(join(tree, 'usr/lib'), { recursive: true })
       mkdirSync(join(tree, 'usr/bin'), { recursive: true })
-      writeFileSync(join(tree, 'AppRun'), '#!/bin/sh\nexit 0\n')
-      writeFileSync(join(tree, 'AppRun.wrapped'), '#!/bin/sh\nexit 0\n')
+      writeFileSync(join(tree, 'AppRun'), `#!/usr/bin/env bash\nset -e\nthis_dir="$(readlink -f "$(dirname "$0")")"\n${bundledMedia ? 'source "$this_dir"/apprun-hooks/linuxdeploy-plugin-gstreamer.sh\n' : ''}source "$this_dir"/apprun-hooks/linuxdeploy-plugin-gtk.sh\nexec "$this_dir"/AppRun.wrapped "$@"\n`)
+      writeFileSync(join(tree, 'AppRun.wrapped'), `#!/bin/sh\nset -e\nexport GST_PLUGIN_SYSTEM_PATH="$APPDIR/usr/lib/gstreamer:$QT_PLUGIN_PATH"\nexport GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0:$QT_PLUGIN_PATH"\ntest "\${GST_PLUGIN_SYSTEM_PATH_1_0+x}" = "$1"\ntest "\${GST_PLUGIN_SYSTEM_PATH_1_0-}" = "$2"\n`)
+      chmodSync(join(tree, 'AppRun.wrapped'), 0o755)
       writeFileSync(join(tree, 'usr/bin/app'), '#!/bin/sh\nexit 0\n')
       chmodSync(join(tree, 'usr/bin/app'), 0o755)
       writeFileSync(join(tree, 'usr/lib/libwebkit2gtk-4.1.so.0'), 'keep WebKit')
+      writeFileSync(join(tree, 'usr/lib/libgssapi_krb5.so.2'), 'keep unrelated library')
+      const mediaPaths = [
+        'usr/lib/libgstreamer-1.0.so.0',
+        'usr/lib/libgstreamer-1.0.so.0.2003.0',
+        'usr/lib/libgstbase-1.0.so.0',
+        'usr/lib/libgstapp-1.0.so.0',
+        'usr/lib/gstreamer-1.0/libgstautodetect.so',
+        'usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner',
+        'usr/libexec/gstreamer-1.0/gst-ptp-helper',
+        'apprun-hooks/linuxdeploy-plugin-gstreamer.sh',
+      ]
+      if (bundledMedia) {
+        for (const path of mediaPaths) {
+          const target = join(tree, path)
+          mkdirSync(join(target, '..'), { recursive: true })
+          if (path === 'usr/lib/libgstreamer-1.0.so.0')
+            symlinkSync('libgstreamer-1.0.so.0.2003.0', target)
+          else
+            writeFileSync(target, path.endsWith('.sh') ? 'export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"\nexport GST_PLUGIN_SCANNER_1_0="$APPDIR/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"\n' : 'drop bundled media')
+        }
+      }
       if (bundledHostLibrary)
         writeFileSync(join(tree, 'usr/lib/libwayland-client.so.0'), 'drop host library')
       writeFileSync(join(tree, 'apprun-hooks/linuxdeploy-plugin-gtk.sh'), 'export GTK_THEME=Adwaita\nexport GDK_BACKEND=x11 # upstream override\nexport GTK_DATA_PREFIX="$APPDIR"\n')
       const image = join(work, 'test.AppImage')
       execFileSync('mksquashfs', [tree, image, '-noappend', '-quiet', '-no-progress'], { stdio: 'inherit' })
-      execFileSync('bash', [fixScriptPath, ...(bundledHostLibrary ? ['--require-removal'] : []), image], { stdio: 'inherit' })
+      execFileSync('bash', [fixScriptPath, ...(bundledHostLibrary || bundledMedia ? ['--require-removal'] : []), image], { stdio: 'inherit' })
       const output = join(work, 'unpacked')
       execFileSync('unsquashfs', ['-d', output, image], { stdio: 'ignore' })
       const hook = join(output, 'apprun-hooks/linuxdeploy-plugin-gtk.sh')
+      for (const path of mediaPaths)
+        expect(lstatSync(join(output, path), { throwIfNoEntry: false }), `${path} must come from the host`).toBeUndefined()
+      expect(readFileSync(join(output, 'usr/lib/libgssapi_krb5.so.2'), 'utf8')).toBe('keep unrelated library')
+      expect(readFileSync(join(output, 'AppRun'), 'utf8')).not.toContain('linuxdeploy-plugin-gstreamer.sh')
+      expect(readFileSync(join(output, 'AppRun.wrapped'), 'utf8')).not.toMatch(/GST_PLUGIN_SYSTEM_PATH(?:_1_0)?=/)
+      for (const mediaPath of [undefined, '', '/custom/media']) {
+        const env = { ...process.env, QT_PLUGIN_PATH: '/custom/qt', GST_PLUGIN_SYSTEM_PATH_1_0: mediaPath }
+        execFileSync('bash', [join(output, 'AppRun'), mediaPath === undefined ? '' : 'x', mediaPath ?? ''], { env, stdio: 'inherit' })
+      }
       expect(readFileSync(hook, 'utf8')).toBe('export GTK_THEME=Adwaita\nexport GTK_DATA_PREFIX="$APPDIR"\n')
       for (const backend of ['', 'wayland', 'x11', 'x11,wayland']) {
         execFileSync('bash', ['-c', 'source "$1"; test "$GDK_BACKEND" = "$2" && test "$GTK_THEME" = Adwaita', '_', hook, backend], {

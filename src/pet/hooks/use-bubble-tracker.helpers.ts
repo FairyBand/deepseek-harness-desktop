@@ -1,15 +1,13 @@
 import type { Motion } from 'dsh-pet-component'
+import { petI18n } from '../i18n'
 import {
   ACTIVE_MOTIONS,
   ACTIVITY_COPY,
-  pickLang,
-  SESSION_LABELS,
   STATUS_COPY,
-  STATUS_TEXT_MAP,
   TOOL_ARG_KEYS,
   TOOL_LABELS,
   TOOL_PATTERNS,
-  UNTITLED_SESSION_TITLE,
+  TRANSLATED_TOOLS,
   WORK_STATUSES,
 } from './use-bubble-tracker.constants'
 
@@ -36,27 +34,28 @@ export function seedNumber(seed: string | number | undefined): number {
   return [...value].reduce((total, char) => total + (char.codePointAt(0) ?? 0), 0)
 }
 
-function selectCopy(variants: readonly string[], seed?: string | number): string {
-  return variants[seedNumber(seed) % variants.length] ?? variants[0]
-}
-
 export function statusCopy(group: string, seed?: string | number): string {
-  return selectCopy(STATUS_COPY[group] ?? STATUS_COPY.working, seed)
+  const key = Object.hasOwn(STATUS_COPY, group) ? group : 'working'
+  return petI18n.t(`pet.bubble.status.${key}.${seedNumber(seed) % STATUS_COPY[key]}`)
 }
 
 export function activityCopy(activity: string, seed?: string | number): string {
-  return selectCopy(ACTIVITY_COPY[activity] ?? STATUS_COPY.working, seed)
+  return ACTIVITY_COPY.has(activity)
+    ? petI18n.t(`pet.bubble.activity.${activity}.${seedNumber(seed) % 3}`)
+    : statusCopy('working', seed)
 }
 
 export function taskCopy(task: string | undefined): string | undefined {
   const value = String(task ?? '').trim().replace(/[。！？.!?]+$/u, '')
   if (!value)
     return undefined
+  if (petI18n.language !== 'zh-CN')
+    return petI18n.t('pet.bubble.task', { task: value })
   if (/^(?:正在|继续)/u.test(value))
     return value
   if (/^(?:准备|检查|验证|修改|修复|测试|构建|整理|分析|梳理|查找|搜索|读取|实现)/u.test(value))
     return `正在${value}`
-  return `正在处理「${value}」`
+  return petI18n.t('pet.bubble.task', { task: value })
 }
 
 export function toolActivityGroup(tool: string | undefined): string {
@@ -67,14 +66,14 @@ export function toolActivityGroup(tool: string | undefined): string {
 export function sessionTitle(session: SessionTitleSource): string {
   const base = [session.title, session.displayTitle, session.name]
     .find((v): v is string => typeof v === 'string' && v.trim().length > 0)
-    ?.trim() ?? UNTITLED_SESSION_TITLE
+    ?.trim() ?? petI18n.t('pet.bubble.untitled')
 
   if (session.phase === 'approval')
-    return `${SESSION_LABELS.waitApproval} · ${base}`
+    return `${petI18n.t('pet.bubble.approval')} · ${base}`
   if (session.phase === 'user-question' || session.phase === 'blocked')
-    return `${SESSION_LABELS.waitChoice} · ${base}`
+    return `${petI18n.t('pet.bubble.choice')} · ${base}`
   if (session.origin === 'subagent')
-    return `${SESSION_LABELS.subagent} · ${base}`
+    return `${petI18n.t('pet.bubble.subagent')} · ${base}`
   return base
 }
 
@@ -149,13 +148,13 @@ export function getLiveActivity(session: BubbleSession, motion: Motion): string 
   const { kind, text, name, args } = session.liveActivity as Record<string, unknown>
 
   if (kind === 'reasoning' && typeof text === 'string' && text.trim()) {
-    return pickLang(`思考 · ${sanitizeText(text)}`, `Thought · ${sanitizeText(text)}`)
+    return `${petI18n.t('pet.bubble.thought')} · ${sanitizeText(text)}`
   }
   if (kind === 'tool' && typeof name === 'string' && name) {
     const tool = name.toLowerCase()
-    const label = TOOL_LABELS[tool]
+    const label = TRANSLATED_TOOLS.has(tool) ? petI18n.t(`pet.bubble.tool.${tool}`) : TOOL_LABELS[tool]
     if (!label)
-      return pickLang(`工具调用 · ${name}`, `Tool · ${name}`)
+      return `${petI18n.t('pet.bubble.tool')} · ${name}`
     const detail = toolArgDetail(tool, args)
     return detail ? `${label} · ${detail}` : label
   }
@@ -163,14 +162,8 @@ export function getLiveActivity(session: BubbleSession, motion: Motion): string 
 }
 
 export function bubbleContent(session: BubbleSession, motion: Motion) {
-  const isSub = session.origin === 'subagent'
   const title = sessionTitle(session)
   const seed = session.id
-
-  const statusText = STATUS_TEXT_MAP[motion]
-    ?? (motion === 'running'
-      ? (isSub ? pickLang('运行中', 'Running') : pickLang('思考中', 'Thinking'))
-      : pickLang('空闲', 'Idle'))
 
   const fallbackCopy = motion === 'waiting'
     ? statusCopy(session.phase === 'approval' ? 'approval' : 'waiting', seed)
@@ -179,18 +172,17 @@ export function bubbleContent(session: BubbleSession, motion: Motion) {
       : statusCopy(motion, seed)
 
   const candidates = [
-    session.lastAgentError ? pickLang(`失败：${String(session.lastAgentError)}`, `Failed: ${String(session.lastAgentError)}`) : undefined,
+    session.lastAgentError ? petI18n.t('pet.bubble.failed', { error: String(session.lastAgentError) }) : undefined,
     taskCopy(session.task as string | undefined),
     getLiveActivity(session, motion),
     fallbackCopy,
     session.description,
     session.message,
-    statusText,
   ]
 
   const description = candidates
     .find((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    ?.trim() ?? pickLang('会话', 'Session')
+    ?.trim() ?? petI18n.t('pet.bubble.untitled')
 
   return {
     title,

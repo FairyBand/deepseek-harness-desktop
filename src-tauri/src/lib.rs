@@ -17,10 +17,18 @@ pub fn patch_core_dir(core_dir: &std::path::Path) -> Result<(), String> {
     service::patch::apply_all_at(core_dir)
 }
 
-/// 应用入口：先做 Wayland 环境兼容，再初始化日志、装配桌面端并进入事件循环。
 pub fn run() -> Result<(), String> {
     let started = std::time::Instant::now();
+    #[cfg(unix)]
+    if let Err(error) = std::env::current_exe()
+        .map_err(|error| error.to_string())
+        .and_then(|executable| desktop::login_path::restore(&executable))
+    {
+        eprintln!("STARTUP_PATH_RESTORE_FAILED: {error}");
+    }
     desktop::startup::verify()?;
+    #[cfg(target_os = "linux")]
+    config::proxy::prepare_inherited_proxy();
     // Wayland EGL workaround：仅 AppImage 需要（见 `should_apply_wayland_egl_workaround`）。
     if should_apply_wayland_egl_workaround(
         &std::env::var("XDG_SESSION_TYPE").unwrap_or_default(),
@@ -63,7 +71,7 @@ pub fn run() -> Result<(), String> {
         "STARTUP_BOOT: name=logger_ready elapsed_ms={}",
         started.elapsed().as_millis()
     );
-    // Unix：把持久化的 DSH_HOME 补回进程环境（issue #871）。必须在桌面端装配之前，
+    // 把持久化的 DSH_HOME 补回进程环境（issue #871、#1195）。必须在桌面端装配之前，
     // 否则首次 get_dsh_data_path 会落到默认目录，日志、store 与 shim 全部写错位置。
     service::data_dir::restore_process_env();
 

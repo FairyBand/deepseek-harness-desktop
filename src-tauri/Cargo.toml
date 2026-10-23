@@ -146,6 +146,7 @@ core-graphics = "0.25"
 core-foundation = "0.10"
 
 [target.'cfg(unix)'.dependencies]
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 libc = "0.2"
 
 # Linux 托盘需要 tray-icon 的 KSNI 后端（背景见 issue #386 / #438）：tauri 只开

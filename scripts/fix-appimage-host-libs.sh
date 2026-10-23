@@ -36,6 +36,16 @@ readonly SQUASHFS_COMPRESSION=zstd
 readonly SQUASHFS_BLOCK_SIZE=131072
 readonly GTK_HOOK=apprun-hooks/linuxdeploy-plugin-gtk.sh
 readonly GDK_OVERRIDE_PATTERN='^[[:space:]]*export[[:space:]]+GDK_BACKEND=x11([[:space:]]+#.*)?[[:space:]]*$'
+readonly GSTREAMER_SOURCE_PATTERN='^[[:space:]]*source[[:space:]].*apprun-hooks/linuxdeploy-plugin-gstreamer[.]sh[[:space:]]*$'
+readonly GSTREAMER_NATIVE_PATTERN='GST_PLUGIN_SYSTEM_PATH(_1_0)?='
+readonly EXCLUDED_MEDIA=(
+  'libgst*.so*'
+  gstreamer-1.0
+  gstreamer1.0
+  gst-plugin-scanner
+  gst-ptp-helper
+  linuxdeploy-plugin-gstreamer.sh
+)
 
 # 在镜像中扫描 squashfs 4.0 superblock：magic "hsqs"，版本字段 s_major/s_minor == 4/0，
 # block_size 为 2 的幂且在 [4096, 1048576]，compression 在 1..6，block_log 与 block_size 自洽。
@@ -152,12 +162,26 @@ if [ ! -d "$tree" ]; then
 fi
 
 removed=()
-for lib in "${EXCLUDED_LIBS[@]}"; do
-  while IFS= read -r found; do
-    rm -f "$found"
+# #1209：整套媒体栈交给宿主，避免版本混用。
+for lib in "${EXCLUDED_LIBS[@]}" "${EXCLUDED_MEDIA[@]}"; do
+  while IFS= read -r -d '' found; do
+    rm -rf "$found"
     removed+=("${found#"$tree"/}")
-  done < <(find "$tree" -name "$lib" -print)
+  done < <(find "$tree" -name "$lib" -prune -print0)
 done
+
+launcher_changed=0
+if grep -Eq "$GSTREAMER_SOURCE_PATTERN" "$tree/AppRun"; then
+  sed -Ei "\|$GSTREAMER_SOURCE_PATTERN|d" "$tree/AppRun"
+  launcher_changed=1
+fi
+
+native_changed=0
+# #1209：apprun-old 用 Qt 路径覆盖 GST；等长改名保留宿主默认值及用户配置。
+if [ -f "$tree/AppRun.wrapped" ] && grep -aEq "$GSTREAMER_NATIVE_PATTERN" "$tree/AppRun.wrapped"; then
+  sed -Ei 's/GST_PLUGIN_SYSTEM_PATH(_1_0)?=/DSH_PLUGIN_SYSTEM_PATH\1=/g' "$tree/AppRun.wrapped"
+  native_changed=1
+fi
 
 hook_changed=0
 # #789：在启动钩子处删除上游强制值，保留用户的 GDK_BACKEND 与其余 GTK 环境。
@@ -168,13 +192,13 @@ fi
 
 if [ "${#removed[@]}" -eq 0 ]; then
   if [ "$require_removal" -eq 1 ]; then
-    echo "fix-appimage-host-libs: none of the host-interface libs were bundled, but" >&2
-    echo "  --require-removal was requested: the over-bundling this guards against (#620)" >&2
+    echo "fix-appimage-host-libs: none of the host-interface libraries or media stack were bundled, but" >&2
+    echo "  --require-removal was requested: the over-bundling this guards against (#620, #1209)" >&2
     echo "  is no longer happening, or the bundler changed. Re-verify before dropping the fix." >&2
     exit 1
   fi
-  if [ "$hook_changed" -eq 0 ]; then
-    echo "fix-appimage-host-libs: no host-interface libs or forced GTK backend, nothing to do"
+  if [ "$hook_changed" -eq 0 ] && [ "$launcher_changed" -eq 0 ] && [ "$native_changed" -eq 0 ]; then
+    echo "fix-appimage-host-libs: no bundled host/media stack or forced GTK backend, nothing to do"
     exit 0
   fi
 fi
@@ -215,12 +239,20 @@ else
   fi
 fi
 
-for lib in "${EXCLUDED_LIBS[@]}"; do
+for lib in "${EXCLUDED_LIBS[@]}" "${EXCLUDED_MEDIA[@]}"; do
   if find "$verified" -name "$lib" -print -quit | grep -q .; then
     echo "fix-appimage-host-libs: verification failed, $lib is still bundled" >&2
     verdict=1
   fi
 done
+if [ -f "$verified/AppRun.wrapped" ] && grep -aEq "$GSTREAMER_NATIVE_PATTERN" "$verified/AppRun.wrapped"; then
+  echo "fix-appimage-host-libs: verification failed, native AppRun still overrides the host GStreamer path" >&2
+  verdict=1
+fi
+if grep -Eq "$GSTREAMER_SOURCE_PATTERN" "$verified/AppRun"; then
+  echo "fix-appimage-host-libs: verification failed, AppRun still sources the removed GStreamer hook" >&2
+  verdict=1
+fi
 if [ -f "$verified/$GTK_HOOK" ] && grep -Eq "$GDK_OVERRIDE_PATTERN" "$verified/$GTK_HOOK"; then
   echo "fix-appimage-host-libs: verification failed, GTK hook still forces GDK_BACKEND=x11" >&2
   verdict=1
@@ -246,4 +278,4 @@ fi
 [ "$verdict" -eq 0 ] || exit 1
 
 mv "$work/out.AppImage" "$appimage"
-echo "fix-appimage-host-libs: repacked $(basename "$appimage") (${#removed[@]} host-interface libs dropped)"
+echo "fix-appimage-host-libs: repacked $(basename "$appimage") (${#removed[@]} bundled host/media entries dropped)"

@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setPetLanguage } from '../i18n'
 import { bubbleContent, getLiveActivity, rawSession, sessionMotion } from './use-bubble-tracker.helpers'
+
+beforeEach(() => setPetLanguage('zh'))
+afterEach(() => setPetLanguage('en'))
 
 describe('rawSession', () => {
   it('rejects payloads that carry no usable session id', () => {

@@ -17,6 +17,7 @@ pub(crate) mod mcp_startup;
 pub(crate) mod mobile_composer;
 pub(crate) mod mobile_sidebar;
 pub(crate) mod model_selection;
+pub(crate) mod permission_settings;
 pub(crate) mod pi_ai_thinking;
 pub(crate) mod plugin_visibility;
 pub(crate) mod renderer;
@@ -37,11 +38,12 @@ use std::path::Path;
 /// 让编排层能看见哪一条出了问题。
 pub(crate) fn apply_all_at(core_dir: &Path) -> Result<(), String> {
     #[allow(clippy::type_complexity)]
-    let patches: [(&str, fn(&Path) -> Result<(), String>); 15] = [
+    let patches: [(&str, fn(&Path) -> Result<(), String>); 16] = [
         ("renderer", renderer::apply_at),
         ("mcp_startup", mcp_startup::apply_at),
         ("composer", composer::apply_at),
         ("conversation_draft", conversation_draft::apply_at),
+        ("permission_settings", permission_settings::apply_at),
         ("scroll_follow", scroll_follow::apply_at),
         ("chat_follow_anchor", chat_follow_anchor::apply_at),
         ("mobile_composer", mobile_composer::apply_at),
