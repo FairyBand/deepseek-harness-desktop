@@ -47,7 +47,7 @@ Conflicts:      @CONFLICTS@
 
 %build
 export CI=true
-# 关闭应用内自更新：升级交给 dnf（见 src-tauri/src/service/update/mod.rs）
+# 关闭应用内自更新：升级交给 dnf（见 src-tauri/src/service/update/version.rs）
 export DSH_DISTRO_MANAGED=copr
 export CARGO_HOME="$PWD/.cargo-home"
 export npm_config_cache="$PWD/.npm-cache"

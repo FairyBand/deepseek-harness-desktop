@@ -122,9 +122,6 @@ pub struct DesktopUpdateInfo {
 
 /// 检查是否有新版本可用（含安装包是否已下载）
 pub async fn check(app_handle: &AppHandle) -> Result<Option<DesktopUpdateInfo>, String> {
-    if super::DISTRO_MANAGED {
-        return Ok(None);
-    }
     prune_old_installers(app_handle);
     match fetch_latest_release(app_handle).await? {
         None => Ok(None),
@@ -290,12 +287,6 @@ fn verify_installer_sha256(path: &std::path::Path, expected: &str) -> Result<(),
 /// 宁可失败，防止第三方镜像投毒未被察觉；官方 GitHub 直连在摘要缺失时仍可
 /// 按旧行为下载（兼容早期未填摘要的发布），下载后若有摘要则强制校验。
 pub async fn download(app_handle: &AppHandle) -> Result<DesktopUpdateInfo, String> {
-    if super::DISTRO_MANAGED {
-        return Err(
-            "UPDATE_DISTRO_MANAGED: updates are delivered by the system package manager"
-                .to_string(),
-        );
-    }
     let release = fetch_latest_release(app_handle)
         .await?
         .ok_or_else(|| "UPDATE_NONE".to_string())?;

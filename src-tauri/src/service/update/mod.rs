@@ -36,10 +36,6 @@ pub use about::{about, DesktopAboutInfo};
 pub use install::{check, download, open_installer, DesktopDownloadProgress, DesktopUpdateInfo};
 pub use pending::launch_pending_installer;
 
-/// 发行版仓库（如 Copr）构建时注入 `DSH_DISTRO_MANAGED`：升级交给系统包管理器，
-/// 应用内既不提示也不下载安装包，否则会在 dnf 管理的安装之外再装一份 AppImage。
-pub(super) const DISTRO_MANAGED: bool = option_env!("DSH_DISTRO_MANAGED").is_some();
-
 /// 自动更新（静默下载后退出时自动安装）是否生效。
 ///
 /// 唯一真值是设置页「自动更新」开关：关闭后只剩用户显式发起的链路（「检查更新」
