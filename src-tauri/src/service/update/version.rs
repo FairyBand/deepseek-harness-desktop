@@ -13,7 +13,7 @@ pub(super) fn current_version() -> String {
 /// 发行版仓库（Copr、AUR、Flathub 等）构建时注入 `DSH_DISTRO_MANAGED`：升级交给系统包
 /// 管理器，应用内不检查、不下载、退出时也不拉起安装包，否则会在包管理器的安装之外再装一份
 /// AppImage（issue #1230）。
-const DISTRO_MANAGED: bool = option_env!("DSH_DISTRO_MANAGED").is_some();
+pub(super) const DISTRO_MANAGED: bool = option_env!("DSH_DISTRO_MANAGED").is_some();
 
 pub(super) fn supports_stable_updates(identifier: &str) -> bool {
     stable_updates_allowed(identifier, DISTRO_MANAGED)
