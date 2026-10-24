@@ -1,0 +1,37 @@
+# fork 专用：每 6 小时查一次上游发布 tag，为新版本触发 Copr 构建（脚本见 .github/scripts/copr-poll.py）。
+# 需要仓库 secrets：COPR_LOGIN、COPR_TOKEN（取自 https://copr.fedorainfracloud.org/api/ ，默认 180 天过期）。
+name: Copr Release Poll
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print the builds that would be submitted
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copr-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    if: github.repository == 'FairyBand/deepseek-harness-desktop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Submit Copr builds for new releases
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: python3 -I .github/scripts/copr-poll.py
