@@ -1,7 +1,7 @@
-# 模板：由 .copr/srpm.sh 填入版本后生成 SRPM。构建需要联网（pnpm / cargo 依赖），
-# Copr 项目须开启 enable_net。
-%global appname DSH Tauri
-%global binname deepseek-harness-desktop
+# 模板：由 .copr/srpm.sh 从 package.json / tauri.conf.json / Cargo.toml / constants.rs 填值后
+# 生成 SRPM。构建需要联网（Node、pnpm、cargo 依赖），Copr 项目须开启 enable_net。
+%global appname @APPNAME@
+%global binname @BINNAME@
 # Tauri 按 productName 在 /usr/lib/<productName> 下查找资源，路径不能改
 %global appdir %{_prefix}/lib/%{appname}
 %global debug_package %{nil}
@@ -11,9 +11,9 @@
 Name:           dsh-tauri
 Version:        @VERSION@
 Release:        @RELEASE@%{?dist}
-Summary:        Desktop application for DeepSeek Harness
+Summary:        @SUMMARY@
 License:        MIT
-URL:            https://github.com/FairyBand/deepseek-harness-desktop
+URL:            https://github.com/dsh-tauri/deepseek-harness-desktop
 Source0:        %{name}-%{version}.tar.gz
 ExclusiveArch:  x86_64 aarch64
 
@@ -38,8 +38,7 @@ Requires:       gstreamer1-plugins-good
 Recommends:     gstreamer1-plugins-bad-free
 
 %description
-A native desktop application for running DeepSeek Harness (dsh) locally with
-one-click install and zero configuration.
+@DESCRIPTION@
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -52,7 +51,7 @@ export CARGO_HOME="$PWD/.cargo-home"
 export npm_config_cache="$PWD/.npm-cache"
 # 用 Node.js 官方构建（与上游 CI 的 setup-node 同源）：Fedora 的 libnode（nodejs22 / nodejs24
 # 均复现）在 Copr mock 里于 V8 正则编译与 Intl.Segmenter 处 SIGSEGV，pnpm 必崩
-node_version=v22.22.0
+node_version=@NODE_VERSION@
 %ifarch x86_64
 node_arch=x64
 %else
@@ -80,19 +79,20 @@ install -Dpm0644 src-tauri/icons/32x32.png %{buildroot}%{_datadir}/icons/hicolor
 install -Dpm0644 src-tauri/icons/128x128.png %{buildroot}%{_datadir}/icons/hicolor/128x128/apps/%{binname}.png
 install -Dpm0644 src-tauri/icons/128x128@2x.png %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/%{binname}.png
 install -Dpm0644 src-tauri/icons/icon.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/%{binname}.png
-# 与 Tauri 自带 rpm 同名同内容：深链 dsh:// 与自启动按这个 desktop 文件注册
+# 与 Tauri 自带 rpm 同名同内容：深链与自启动按这个 desktop 文件注册。
+# Categories 对应 tauri.conf.json 的 category = DeveloperTool
 install -dm0755 %{buildroot}%{_datadir}/applications
 cat > "%{buildroot}%{_datadir}/applications/%{appname}.desktop" <<EOF
 [Desktop Entry]
 Categories=Development;
-Comment=Desktop application for DeepSeek Harness
+Comment=%{summary}
 Exec=%{binname}
 StartupWMClass=%{binname}
 Icon=%{binname}
 Name=%{appname}
 Terminal=false
 Type=Application
-MimeType=x-scheme-handler/dsh
+MimeType=x-scheme-handler/@SCHEME@
 EOF
 
 %files
