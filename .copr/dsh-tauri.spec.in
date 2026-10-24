@@ -8,7 +8,7 @@
 # 资源里插件依赖的 shebang 会被自动推导成依赖系统 nodejs，实际由应用自带的 Node 运行
 %global __requires_exclude ^/usr/bin/node$
 
-Name:           dsh-tauri
+Name:           @NAME@
 Version:        @VERSION@
 Release:        @RELEASE@%{?dist}
 Summary:        @SUMMARY@
@@ -36,6 +36,8 @@ BuildRequires:  libappindicator-gtk3-devel
 Requires:       libappindicator-gtk3
 Requires:       gstreamer1-plugins-good
 Recommends:     gstreamer1-plugins-bad-free
+# dsh-tauri 与 dsh-tauri-beta 安装同一组文件，只能二选一；切换渠道用 dnf swap
+Conflicts:      @CONFLICTS@
 
 %description
 @DESCRIPTION@
