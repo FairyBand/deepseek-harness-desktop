@@ -3,6 +3,15 @@
 %global appdir %{_prefix}/lib/%{appname}
 %global debug_package %{nil}
 %global __requires_exclude ^/usr/bin/node$
+# resources/node_modules 同时带宿主与远端平台的 .node，elfdeps 不看架构，会把异架构绑定的
+# 符号需求算进本包（x86_64 多出 GLIBC_2.17、aarch64 多出 2.2.5，本架构 glibc 都没有）。
+# 只对异架构那一侧关掉自动依赖生成，文件本体保留给 SSH 远端同步。
+%ifarch x86_64
+%global __requires_exclude_from ^%{appdir}/resources/node_modules/@tailwindcss/oxide-linux-arm64-gnu/.*$
+%endif
+%ifarch aarch64
+%global __requires_exclude_from ^%{appdir}/resources/node_modules/@tailwindcss/oxide-linux-x64-gnu/.*$
+%endif
 
 Name:           @NAME@
 Version:        @VERSION@
