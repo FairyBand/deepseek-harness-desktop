@@ -76,6 +76,7 @@ check('SRPM fills Next metadata, picks highest release and includes required sub
   assert.match(spec, /Summary:\s+Desktop application for DeepSeek Harness \(dsh\)/)
   assert.match(spec, /MimeType=x-scheme-handler\/dsh/)
   assert.doesNotMatch(spec, /@[A-Z_]+@/)
+  assert.match(spec, /node_version=v22\.22\.0/)
   const files = run('bash', ['-c', 'tar -tzf source.tar.gz', '_'], { cwd: join(work, 'output') }).trim().split('\n')
   for (const name of ['tauri-runtime-electron', 'electron-rs', 'tauri-plugin-notifications']) {
     assert.ok(files.includes(`dsh-tauri-beta-0.3.0~pre.alpha.2/crates/${name}/Cargo.toml`))
