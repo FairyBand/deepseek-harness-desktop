@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">
-    <img src="public/deepseek-harness-desktop-tauri.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
+    <img src="public/logo.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
   </a>
 </p>
 
@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Релиз" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="Рекомендуемый DSH 0.2.1-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.4-4d6bfe" alt="Рекомендуемый DSH 0.2.1-rc.4" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="Лицензия MIT" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Загрузки" />
@@ -45,14 +45,14 @@
 
 ## Возможности
 
-- 🪶 **Нативный десктоп** — Tauri 2 + React 19 + HeroUI 3, встраивание локального интерфейса Harness.
+- 🪶 **Нативный десктоп** — Tauri 2(Electron Runtime) + React 19 + HeroUI 3, встраивание локального интерфейса Harness.
 - 📱 **Дистанционное подключение** — отсканируйте QR-код в приложении Android / iOS, чтобы подключиться к DSH на вашем компьютере через LAN или публичный туннель Cloudflare.
 - 🔄 **Управление средой выполнения** — установка зависимостей, выбор версий ядра и доступ к обновлениям десктопа/ядра.
 - 🧩 **Управление плагинами** — 12 встроенных плагинов, а также установка из локального каталога, отключение встроенных, установка плагинов сообщества, обновления, удаление и детали ошибок.
 - 🗂️ **Конфигурация профилей** — отдельные конфигурации плагинов/настроек с переносом, резервным копированием и клонированием данных профиля в один клик.
 - 💽 **Каталог данных** — выбор места хранения данных при установке (Windows); позже в «Настройках» на Windows, macOS и Linux каталог можно перенести или откатить.
 - ⌨️ **Интеграция с CLI** — управляемые команды `dsh` / `pnpm` через shim-обёртки, а не глобальная установка ядра npm.
-- 🐾 **Десктопные питомцы** — ресурсы Pets / Codex, импорт пакетов и активность в диалоге; предустановленные медиа берутся с удалённых хостов.
+- 🐾 **Десктопные питомцы** — их даёт пресет-плагин `dsh-pet-lite`, см. пресеты ниже.
 - 🎨 **Персонализация** — 8 палитр, локальное масштабирование интерфейса, режим терминала, регулируемая прозрачность и необязательное матовое размытие.
 
 ## Встроенные плагины
@@ -61,12 +61,10 @@
 
 - [DSH Tauri](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri) — основной плагин: связь десктопа с Harness, адаптеры версий и управление зависимостями плагинов
 - [DSH Tauri UI](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-ui) — интерфейс настроек десктопа, нативные компоненты ядра, темы и палитры
-- [DSH Tauri Mobile UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-mobile-ui) — сенсорные макеты и мобильные параметры
 - [DSH Tauri Worktree](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-worktree) — Git worktrees и checkout на уровне сессии
 - [DSH Tauri Extension](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-extension) — официальный менеджер плагинов, магазин плагинов, Skills и MCP
-- [DSH Tauri Scheduler](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-scheduler) — плановые задачи и история запусков
 - [DSH Tauri Archive](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-archive) — архивирование и восстановление чата
-- [DSH Tauri Pet](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-pet) — настройки десктопного питомца и состояния активности
+- [DSH Pet Lite](https://github.com/hairyf/dsh-pet-lite) — лёгкий пресет-плагин питомца, устанавливается со страницы плагинов
 - [DSH Tauri Rightclick Menu](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-rightclick) — контекстные меню сессии, рабочей области и текста
 - [DSH Tauri Model](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-model) — выбор модели, параметры и автоматическая конфигурация
 - [DSH Tauri Remote](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-remote) — дистанционные подключения к Harness и синхронизация по SSH, а также шаринг локального Harness по LAN или публичному туннелю
@@ -77,12 +75,12 @@
 При установке предлагаются следующие плагины сообщества для установки по требованию.
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — боковая панель редактора для каждой сессии
-- [Billion Context](https://github.com/ranxianglei/billion-context) — сжатие контекста и восстановление истории
 - [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — офисные документы, PDF, презентации и таблицы
 - [DSH Market](https://github.com/dsh-market/dsh-market) — магазин плагинов сообщества
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — откат диалога и резервные копии рабочей области
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM-каналы и управление ботами
 - [DSH OPS](https://github.com/T-Auto/dsh-ops) — инструменты низкоуровневых операций для сокращения расхода токенов и времени выполнения задач
+- [Billion Context](https://github.com/ranxianglei/billion-context) — сжатие контекста и восстановление истории
 
 Запросите новые или обновлённые пресеты через [Issues](https://github.com/dsh-tauri/deepseek-harness-desktop/issues). Доступные версии подчиняются правилам совместимости с ядром из манифеста.
 
@@ -92,9 +90,9 @@
 
 | Платформа | Требования | Установщик |
 | --- | --- | --- |
-| Windows | Windows 10+, WebView2 | x64 `.exe` / `.msi` |
-| macOS | macOS 12+; веб-интерфейсу требуются возможности Safari 17.4+ | Intel / Apple Silicon `.dmg` |
-| Linux | библиотеки WebKit2GTK 4.1 (runtime) | x64 `.AppImage` / `.deb` |
+| Windows | Windows 10+ (встроенный движок Chromium) | x64 `.exe` / `.msi` |
+| macOS | macOS 12+ (встроенный движок Chromium) | Intel / Apple Silicon `.dmg` |
+| Linux | Встроенный движок Chromium | x64 `.AppImage` / `.deb` |
 
 macOS также поддерживает установку через Homebrew:
 
@@ -135,8 +133,8 @@ brew install dsh-tauri/desktop/deepseek-harness
 
 | Текущая база | Версия |
 | --- | --- |
-| Рекомендуемое ядро Harness | `0.2.1-rc.2` |
-| Минимальная поддерживаемая версия ядра | `0.1.7-rc.1`; это не гарантия совместимости с каждым плагином |
+| Рекомендуемое ядро Harness | `0.2.1-rc.4` |
+| Минимальная поддерживаемая версия ядра | `0.2.1-rc.4`; это не гарантия совместимости с каждым плагином |
 
 Более старые ядра больше не поддерживаются. Ранее записанные сведения о совместимости описывают историю, а не текущий диапазон поддержки.
 
@@ -176,7 +174,8 @@ brew install dsh-tauri/desktop/deepseek-harness
 
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — upstream-платформа агента `dsh`
 - [deepseek-harness-pkg](https://github.com/dsh-tauri/deepseek-harness-pkg) — предварительно собранные дистрибутивы Harness и источник загрузок
-- [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — ассеты питомцев и рендерер
+- [electron-rs](https://github.com/hairyf/electron-rs) · [tauri-runtime-electron](https://github.com/hairyf/tauri-runtime-electron) — Electron Rust и Electron-рантайм для Tauri 2
+- [dsh-pet-lite](https://github.com/hairyf/dsh-pet-lite) · [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — плагин, ассеты и рендерер питомцев
 - [dsh-plugin-codex-pets](https://github.com/Skylarking/dsh-plugin-codex-pets) · [BongoCat](https://github.com/ayangweb/BongoCat) · [dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) · [codex-to-dsh-pet](https://github.com/Signalight/codex-to-dsh-pet) — референсные проекты питомцев
 
 ## Вкладчики

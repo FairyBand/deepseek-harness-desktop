@@ -35,6 +35,7 @@ permissions:
 jobs:
   build:
     name: Build offline bundle (${{ matrix.id }})
+    # 同 build-macos.yml：架构必须与 runner 一致，否则原生可选依赖会漏装（issue #1326）。
     strategy:
       fail-fast: false
       matrix:
@@ -42,10 +43,12 @@ jobs:
           - id: macos-aarch64
             target: aarch64-apple-darwin
             arch: arm64
+            runner: macos-26
           - id: macos-x86_64
             target: x86_64-apple-darwin
             arch: x64
-    runs-on: macos-latest
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     steps:
       - name: Filter target architecture
@@ -114,70 +117,14 @@ jobs:
             exit 1
           fi
 
-      # 离线包把 Node 运行时与原生模块（sharp / koffi / node-pty 的 `.node`、`@img` 的
-      # `.dylib`）一起塞进了 .app。Apple 的公证要求包里**每一个** Mach-O 都带 Developer ID
-      # 签名与安全时间戳，而 tauri 只签自己产出的可执行文件（`--deep` 按 Apple 的定义会
-      # 跳过 `Contents/Resources/**`），于是公证会逐条报
-      # 「The binary is not signed with a valid Developer ID certificate」。
-      # 这里先把随包资源里的 Mach-O 全部签掉，再交给 tauri 打包与公证。
-      - name: Sign bundled Mach-O binaries
+      - name: Route hdiutil through the flake buffer
         if: steps.check.outputs.should_run == 'true'
         shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        # runner 上 hdiutil 会随机报 Resource busy / DiskArbitration 超时
+        # (actions/runner-images#7522)，把带重试的同名包装排到 PATH 前面。
         run: |
-          set -euo pipefail
-          keychain="$RUNNER_TEMP/bundle-signing.keychain-db"
-          keychain_password="$(openssl rand -base64 32)"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/bundle-cert.p12"
-
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/bundle-cert.p12" -k "$keychain" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" >/dev/null
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-
-          identity="$(security find-identity -v -p codesigning "$keychain" \
-            | awk -F'"' '/Developer ID Application/{print $2; exit}')"
-          if [ -z "$identity" ]; then
-            echo "::error::no Developer ID Application identity found in the imported certificate"
-            exit 1
-          fi
-
-          # 只挑可能是 Mach-O 的候选（可执行位或已知扩展名）再用 file 确认，避免对上万个
-          # 文件逐个调用 file。
-          #
-          # 已经是 Developer ID 签名的（nodejs.org 的 node 二进制自带签名与 JIT 相关
-          # entitlement）原样保留：重签会丢掉 entitlement，节点进程在 hardened runtime
-          # 下会因 JIT 被拒直接崩。其余 ad-hoc / 未签名的才补签，并在存在 entitlement 时
-          # 一并保留。
-          signed=0
-          kept=0
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            case "$(file -b "$file")" in
-              *Mach-O*) ;;
-              *) continue ;;
-            esac
-            authority="$(codesign -dv --verbose=2 "$file" 2>&1 | awk -F= '/^Authority=/{print $2; exit}' || true)"
-            if [ "${authority#Developer ID Application}" != "$authority" ]; then
-              kept=$((kept + 1))
-              continue
-            fi
-            preserve=""
-            if codesign -d --entitlements - "$file" 2>/dev/null | grep -q '<key>'; then
-              preserve="--preserve-metadata=entitlements"
-            fi
-            codesign --force --options runtime --timestamp $preserve \
-              --keychain "$keychain" --sign "$identity" "$file"
-            signed=$((signed + 1))
-          done < <(find src-tauri/resources -type f \
-            \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -perm -100 \) -print)
-          echo "signed $signed Mach-O binaries under src-tauri/resources ($kept already Developer ID signed)"
-          [ "$signed" -gt 0 ] || { echo "::error::no unsigned Mach-O binaries found under src-tauri/resources"; exit 1; }
+          chmod +x scripts/hdiutil-retry/hdiutil
+          echo "$PWD/scripts/hdiutil-retry" >> "$GITHUB_PATH"
 
       # 必须同时产出 app：只给 `--bundles dmg` 时 tauri 会把 .app 当中间产物，打完 dmg
       # 就删掉它（日志里的 `Cleaning .../bundle/macos/<name>.app`），后面的签名/公证
@@ -192,20 +139,63 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg
+        # 公证（notarize）走 appstoreconnect.apple.com，runner 偶发 NSURLErrorDomain
+        # -1009 "offline" 直接让整次打包失败。代码签名与产物就绪都不是原因，重试即可
+        # 规避；只有非网络类失败才立刻放弃，避免把真实错误耗成多次重试。
+        run: |
+          for attempt in 1 2 3; do
+            log="tauri-build-$attempt.log"
+            if pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config src-tauri/tauri.macos-bundle.conf.json 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ] || ! grep -Eq 'Notariz|notarize|NSURLError|Internet connection appears to be offline|codesign' "$log"; then
+              exit 1
+            fi
+            echo "::warning::notarization/reachability failure on attempt $attempt; retrying"
+            sleep 30
+          done
+          exit 1
 
       - name: Verify signature and notarization
         if: steps.check.outputs.should_run == 'true'
         shell: bash
         run: |
-          app_path="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -type d -name '*.app' -print -quit)"
+          app_path="$(find "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -type d -name '*.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo '::error::Built macOS app bundle was not found'
             exit 1
           fi
+          inner_apps=("$app_path"/Contents/Resources/runtime/darwin-*/*.app)
+          [ "${#inner_apps[@]}" -eq 1 ]
+          inner_app="${inner_apps[0]}"
+          for framework in "Electron Framework" Mantle ReactiveObjC Squirrel; do
+            for link in "$framework" Resources Versions/Current; do
+              path="$inner_app/Contents/Frameworks/$framework.framework/$link"
+              if [ ! -L "$path" ]; then
+                echo "::error::Framework symlink was not preserved: $path"
+                exit 1
+              fi
+            done
+          done
+          codesign --verify --deep --strict --verbose=2 "$inner_app"
+          codesign --display --entitlements :- "$inner_app" > "$RUNNER_TEMP/electron-entitlements.plist"
+          python3 -c 'import plistlib, sys; e = plistlib.load(open(sys.argv[1], "rb")); assert all(e.get(key) is True for key in ("com.apple.security.cs.allow-jit", "com.apple.security.cs.disable-library-validation")), e' "$RUNNER_TEMP/electron-entitlements.plist"
+          npm install --prefix "$RUNNER_TEMP/native-addon-smoke" --cache "$RUNNER_TEMP/native-addon-smoke/npm-cache" --no-audit --no-fund node-addon-require-builtin@0.1.9
+          inner_binary=("$inner_app"/Contents/MacOS/*)
+          ELECTRON_RUN_AS_NODE=1 NARB_NATIVE_CACHE_DIR="$RUNNER_TEMP/native-addon-smoke/cache" "${inner_binary[0]}" --eval 'const { createRequire } = require("node:module"); const { resolve } = require("node:path"); const addon = createRequire(resolve(process.argv[1], "package.json"))("node-addon-require-builtin"); require("node:assert/strict").equal(typeof addon.requireBuiltin("internal/modules/esm/loader").getOrInitializeCascadedLoader, "function"); console.log(addon.getBindingInfo());' "$RUNNER_TEMP/native-addon-smoke"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
+          # 原生可选依赖按宿主平台落盘，交叉编译会漏掉目标架构那一份（issue #1326）。
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) oxide=oxide-darwin-arm64 ;;
+            *) oxide=oxide-darwin-x64 ;;
+          esac
+          binding="$(find "$app_path/Contents/Resources/resources/node_modules/@tailwindcss/$oxide" -name '*.node' -print -quit)"
+          if [ -z "$binding" ]; then
+            echo "::error::@tailwindcss/$oxide is missing for ${{ matrix.target }}; the app cannot load its native binding"
+            exit 1
+          fi
 
       # 已知限制：.app 若被拖进 /Applications 且不属于当前用户（或来自下载的只读卷），
       # 随包 dsh 内核同样不可写，桌面端启动时的插件入口链接会失败。用户目录自持的
@@ -215,6 +205,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: release-bundle-${{ matrix.id }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7

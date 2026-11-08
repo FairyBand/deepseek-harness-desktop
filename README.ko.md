@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">
-    <img src="public/deepseek-harness-desktop-tauri.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
+    <img src="public/logo.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
   </a>
 </p>
 
@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="Recommended DSH 0.2.1-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.4-4d6bfe" alt="Recommended DSH 0.2.1-rc.4" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="MIT License" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Downloads" />
@@ -45,14 +45,14 @@
 
 ## 기능
 
-- 🪶 **네이티브 데스크톱** — Tauri 2 + React 19 + HeroUI 3 기반으로 로컬 Harness UI를 내장합니다.
+- 🪶 **네이티브 데스크톱** — Tauri 2(Electron Runtime) + React 19 + HeroUI 3 기반으로 로컬 Harness UI를 내장합니다.
 - 📱 **원격 연결** — Android / iOS 앱에서 QR 코드를 스캔하여 LAN 또는 Cloudflare 공개 터널을 통해 컴퓨터의 DSH에 연결합니다.
 - 🔄 **런타임 관리** — 의존성을 설치하고 코어 버전을 선택하며, 데스크톱과 코어 업데이트 기능을 이용할 수 있습니다.
 - 🧩 **플러그인 관리** — 12개의 내장 플러그인을 제공하며, 로컬 디렉터리에서 설치, 내장 플러그인 비활성화, 커뮤니티 플러그인 설치, 업그레이드, 제거, 오류 상세 정보 확인을 지원합니다.
 - 🗂️ **프로필 구성** — 프로필별로 플러그인과 설정을 분리하고, 클릭 한 번으로 프로필 데이터를 이전, 백업, 복제할 수 있습니다.
 - 💽 **데이터 디렉터리** — 설치 시 데이터 저장 위치를 선택하고(Windows), 나중에 Windows, macOS, Linux의 설정에서 이전하거나 되돌릴 수 있습니다.
 - ⌨️ **CLI 통합** — npm을 통한 전역 코어 설치가 아니라, 관리형 shim을 통해 `dsh` / `pnpm` 명령어를 제공합니다.
-- 🐾 **데스크톱 펫** — Pets / Codex 리소스, 팩 가져오기, 대화 활동 표시를 지원합니다. 사전 설정된 미디어는 원격 호스트에서 가져옵니다.
+- 🐾 **데스크톱 펫** — `dsh-pet-lite` 프리셋 플러그인이 제공합니다. 아래 프리셋 플러그인을 참고하세요.
 - 🎨 **개인화** — 8가지 색상 팔레트, 로컬 UI 배율 조정, 터미널 모드, 불투명도 조절, 선택적 반투명 블러 효과를 제공합니다.
 
 ## 내장 플러그인
@@ -61,12 +61,10 @@
 
 - [DSH Tauri](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri) — 핵심 플러그인: 데스크톱과 Harness 간 통신, 버전 어댑터, 플러그인 의존성 관리
 - [DSH Tauri UI](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-ui) — 데스크톱 설정 UI, 네이티브 코어 구성 요소, 테마, 색상 팔레트
-- [DSH Tauri Mobile UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-mobile-ui) — 터치 레이아웃과 모바일 환경 설정
 - [DSH Tauri Worktree](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-worktree) — 세션 단위 Git 워크트리와 체크아웃
 - [DSH Tauri Extension](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-extension) — 공식 플러그인 관리자, 플러그인 마켓, Skills, MCP
-- [DSH Tauri Scheduler](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-scheduler) — 예약 작업과 실행 기록
 - [DSH Tauri Archive](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-archive) — 대화 보관과 복원
-- [DSH Tauri Pet](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-pet) — 데스크톱 펫과 활동 상태 설정
+- [DSH Pet Lite](https://github.com/hairyf/dsh-pet-lite) — 가벼운 데스크톱 펫 프리셋 플러그인, 플러그인 페이지에서 설치
 - [DSH Tauri Rightclick Menu](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-rightclick) — 세션, 작업 공간, 텍스트의 컨텍스트 메뉴
 - [DSH Tauri Model](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-model) — 모델 선택, 매개변수, 자동 구성
 - [DSH Tauri Remote](https://dshtauri.mintlify.site/en/built-in-plugins/dsh-tauri-remote) — SSH를 통한 원격 Harness 연결 및 동기화, LAN 또는 공개 터널을 통한 로컬 Harness 공유
@@ -77,12 +75,12 @@
 초기 설정 과정에서 다음 커뮤니티 플러그인을 필요에 따라 설치할 수 있습니다.
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — 세션별 편집기 사이드바
-- [Billion Context](https://github.com/ranxianglei/billion-context) — 컨텍스트 압축과 기록 복원
 - [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — Office 문서, PDF, 프레젠테이션, 스프레드시트
 - [DSH Market](https://github.com/dsh-market/dsh-market) — 커뮤니티 플러그인 마켓
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — 대화 되감기와 작업 공간 백업
 - [DSH IM](https://github.com/xmanrui/dsh-im) — IM 채널과 봇 관리
 - [DSH OPS](https://github.com/T-Auto/dsh-ops) — 토큰 사용량과 작업 실행 시간을 줄이는 저수준 작업 도구
+- [Billion Context](https://github.com/ranxianglei/billion-context) — 컨텍스트 압축과 기록 복원
 
 프리셋 추가나 업데이트는 [Issues](https://github.com/dsh-tauri/deepseek-harness-desktop/issues)를 통해 요청하세요. 사용 가능한 버전은 매니페스트의 코어 호환성 규칙을 따릅니다.
 
@@ -92,9 +90,9 @@
 
 | 플랫폼 | 요구 사항 | 설치 프로그램 |
 | --- | --- | --- |
-| Windows | Windows 10+, WebView2 | x64 `.exe` / `.msi` |
-| macOS | macOS 12+; 웹 UI는 Safari 17.4+ 수준의 기능 필요 | Intel / Apple Silicon `.dmg` |
-| Linux | WebKit2GTK 4.1 런타임 라이브러리 | x64 `.AppImage` / `.deb` |
+| Windows | Windows 10+ (내장 Chromium 엔진) | x64 `.exe` / `.msi` |
+| macOS | macOS 12+ (내장 Chromium 엔진) | Intel / Apple Silicon `.dmg` |
+| Linux | 내장 Chromium 엔진 | x64 `.AppImage` / `.deb` |
 
 macOS에서는 Homebrew로도 설치할 수 있습니다:
 
@@ -142,8 +140,8 @@ Windows에서 시작에 실패하면 네이티브 대화 상자에 원인 오류
 
 | 현재 기준 | 버전 |
 | --- | --- |
-| 권장 Harness 코어 | `0.2.1-rc.2` |
-| 지원하는 최소 코어 | `0.1.7-rc.1`; 모든 플러그인의 호환성을 보장하지는 않음 |
+| 권장 Harness 코어 | `0.2.1-rc.4` |
+| 지원하는 최소 코어 | `0.2.1-rc.4`; 모든 플러그인의 호환성을 보장하지는 않음 |
 
 이전 코어는 더 이상 지원하지 않습니다. 과거의 호환성 기록은 이력을 나타낼 뿐, 현재 지원 범위를 의미하지 않습니다.
 
@@ -183,7 +181,8 @@ Windows에서 시작에 실패하면 네이티브 대화 상자에 원인 오류
 
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — 업스트림 `dsh` 에이전트 플랫폼
 - [deepseek-harness-pkg](https://github.com/dsh-tauri/deepseek-harness-pkg) — 사전 빌드된 Harness 배포판과 다운로드 소스
-- [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — 펫 리소스와 렌더러
+- [electron-rs](https://github.com/hairyf/electron-rs) · [tauri-runtime-electron](https://github.com/hairyf/tauri-runtime-electron) — Electron Rust 및 Tauri 2용 Electron 런타임
+- [dsh-pet-lite](https://github.com/hairyf/dsh-pet-lite) · [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — 펫 플러그인, 리소스와 렌더러
 - [dsh-plugin-codex-pets](https://github.com/Skylarking/dsh-plugin-codex-pets) · [BongoCat](https://github.com/ayangweb/BongoCat) · [dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) · [codex-to-dsh-pet](https://github.com/Signalight/codex-to-dsh-pet) — 펫 참고 프로젝트
 
 ## 기여자

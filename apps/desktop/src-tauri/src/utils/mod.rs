@@ -1,0 +1,469 @@
+use crate::{AppHandle, Window};
+#[cfg(any(windows, target_os = "linux"))]
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
+
+use tauri::{ Manager, Runtime};
+
+pub fn show_window<R: Runtime>(window: &Window<R>) {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// 显示主窗口：托盘「打开面板」、托盘左键点击、macOS Dock 图标点击共用。
+/// 主窗口关闭只隐藏到托盘（见 builder 的 on_window_event），所以这里取到即可 show；
+/// 若窗口确实不存在（非预期路径），仅记录日志，不重建。
+pub fn shell_window<R: Runtime>(app: &AppHandle<R>) -> Option<Window<R>> {
+    app.get_window("main").or_else(|| {
+        app.windows().into_values().find(|window| {
+            window.label().starts_with("window-") || window.label().starts_with("remote-")
+        })
+    })
+}
+
+pub fn operation_window<R: Runtime>(app: &AppHandle<R>) -> Option<Window<R>> {
+    use crate::service::workflow::instances;
+    let profile = instances::current_profile()?;
+    app.get_window("main")
+        .filter(|window| instances::window_uses_profile(window.label(), &profile))
+        .or_else(|| {
+            app.windows().into_values().find(|window| {
+                (window.label().starts_with("window-") || window.label().starts_with("remote-"))
+                    && instances::window_uses_profile(window.label(), &profile)
+            })
+        })
+}
+
+pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = shell_window(app) {
+        // 关窗驻留用的是应用级 hide（NSApp hide:，见 builder 的 CloseRequested），
+        // 恢复前必须先 unhide 整个应用，否则 window.show() 在隐藏态应用上不可见。
+        #[cfg(target_os = "macos")]
+        if let Err(error) = app.show() {
+            log::warn!("[window] APP_SHOW_FAILED: {error}");
+        }
+        // Accessory 下 window.show() 有历史问题（tauri #5122），必须先切回
+        // regular 再 show；放在这里可一次覆盖托盘菜单「打开面板」、托盘左键、
+        // RunEvent::Reopen、release single-instance 四条恢复路径。
+        #[cfg(target_os = "macos")]
+        crate::desktop::activation::set_regular_policy(app);
+        // 恢复路径不改变全屏状态：全屏关窗后从托盘恢复，窗口依旧全屏。
+        // 不在此重新挂起 Accessory：窗口此时已可见，若挂起推迟标志，用户
+        // 退出全屏时 on_window_resized 会把可见应用切进 Accessory，导致 Dock
+        // 图标与 ⌘-Tab 在窗口仍打开时消失。Accessory 只在关窗驻留路径的
+        // hide 之后生效，前台可见态应保持 regular。
+        show_window(&window);
+        // 恢复路径不改变全屏状态：全屏关窗后从托盘恢复，窗口依旧全屏，
+        // 而 set_regular_policy 已无条件清掉推迟标志。这里按需重新挂起，
+        // 否则用户退出全屏时 Accessory 永不生效（Dock / ⌘-Tab 整个驻留期可见）。
+        #[cfg(target_os = "macos")]
+        crate::desktop::activation::rearm_pending_accessory_if_fullscreen(&window);
+    } else {
+        log::warn!("[window] main window not found, skip show");
+    }
+}
+
+/// 解码子进程输出的一行。
+///
+/// 中文 Windows 下子进程（cmd.exe、python MCP 服务器等）按 ANSI 代码页输出 GBK，
+/// 图省事的 `from_utf8_lossy` 会把 `系统找不到指定的路径。` 解成
+/// `ϵͳ�Ҳ���ָ����·����`——日志里认不出原话。这里先严格 UTF-8，失败再按 ANSI
+/// 代码页解码，仍失败才回落 lossy。
+///
+/// 任何情况下都不能中断读取：管道读端一关，dsh 主进程写 stderr 就收到 EPIPE
+/// 并静默退出（见 `service::workflow::utils::drain_subprocess_output`）。
+pub fn decode_process_line(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    #[cfg(windows)]
+    if let Some(text) = decode_multibyte(bytes, windows_sys::Win32::Globalization::CP_ACP) {
+        return text;
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// 按给定代码页把多字节串解成 UTF-16，再取 `String`；转换失败返回 `None`。
+#[cfg(windows)]
+pub(crate) fn decode_multibyte(bytes: &[u8], codepage: u32) -> Option<String> {
+    use windows_sys::Win32::Globalization::MultiByteToWideChar;
+
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    if bytes.len() > i32::MAX as usize {
+        return None;
+    }
+    let len = bytes.len() as i32;
+    // SAFETY: 指针与长度同源于 `bytes`；空缓冲 + 0 长度只探测所需宽字符数。
+    let needed =
+        unsafe { MultiByteToWideChar(codepage, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    if needed <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; needed as usize];
+    // SAFETY: `wide` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written =
+        unsafe { MultiByteToWideChar(codepage, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), needed) };
+    if written <= 0 {
+        return None;
+    }
+    wide.truncate(written as usize);
+    Some(String::from_utf16_lossy(&wide))
+}
+
+/// 按给定代码页把文本编码成多字节串；出现该代码页无法表示的字符时返回 `None`。
+///
+/// 与 [`decode_process_line`] 对称：写入交给外部程序按系统代码页解析的文件
+/// （`.cmd`/`.bat`）时，UTF-8 字节会被读成乱码。带 `WC_NO_BEST_FIT_CHARS`：
+/// 否则 `∞` 这类字符会被「近似」成 `8`，编出一条指向别处的路径却报成功。
+#[cfg(windows)]
+pub(crate) fn encode_multibyte(text: &str, codepage: u32) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Globalization::{WideCharToMultiByte, CP_UTF8, WC_NO_BEST_FIT_CHARS};
+
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    // UTF-8 能表示 Rust `str` 的全部字符（无落单代理项），且该代码页不接受
+    // `lpUsedDefaultChar`；直接给出等价字节。
+    if codepage == CP_UTF8 {
+        return Some(text.as_bytes().to_vec());
+    }
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.len() > i32::MAX as usize {
+        return None;
+    }
+    let len = wide.len() as i32;
+    let mut used_default = 0i32;
+    // SAFETY: 指针与长度同源于 `wide`；空缓冲 + 0 长度只探测所需字节数。
+    let needed = unsafe {
+        WideCharToMultiByte(
+            codepage,
+            WC_NO_BEST_FIT_CHARS,
+            wide.as_ptr(),
+            len,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+            &mut used_default,
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut bytes = vec![0u8; needed as usize];
+    used_default = 0;
+    // SAFETY: `bytes` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written = unsafe {
+        WideCharToMultiByte(
+            codepage,
+            WC_NO_BEST_FIT_CHARS,
+            wide.as_ptr(),
+            len,
+            bytes.as_mut_ptr(),
+            needed,
+            std::ptr::null(),
+            &mut used_default,
+        )
+    };
+    if written <= 0 || used_default != 0 {
+        return None;
+    }
+    bytes.truncate(written as usize);
+    Some(bytes)
+}
+
+/// 路径的 Windows 8.3 短名（纯 ASCII），长名含非 ASCII 时用它烘焙进 `.cmd`。
+///
+/// 短名由卷上的 8dot3 机制维护：路径不存在、或该卷已关闭短名时返回 `None`
+/// （此时 API 原样返回长名，调用方据 `is_ascii` 判定不可用）。
+#[cfg(windows)]
+pub(crate) fn short_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: 空缓冲 + 0 长度只探测所需长度（含结尾 NUL）；指针来自 `wide`。
+    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; needed as usize];
+    // SAFETY: `buf` 恰有 `needed` 个元素，等于上一次探测出的所需长度。
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return None;
+    }
+    buf.truncate(written as usize);
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&buf)))
+}
+
+/// 外部程序（cmd.exe）解析文本文件所用的代码页：优先 OEM，其次 ANSI。
+///
+/// 批处理文件由 cmd.exe 按控制台代码页读取（中文 Windows 为 936），因此把带
+/// 非 ASCII 路径的 `.cmd` 写成 UTF-8 必然乱码。取不到时回落 UTF-8 代码页，
+/// 调用方据此退回原字节写出。
+#[cfg(windows)]
+pub(crate) fn console_code_page() -> u32 {
+    use windows_sys::Win32::Globalization::{GetACP, GetOEMCP};
+
+    // SAFETY: 两个 API 都无参数、无副作用，仅返回系统代码页常量。
+    let oem = unsafe { GetOEMCP() };
+    if oem != 0 {
+        return oem;
+    }
+    // SAFETY: 同上。
+    let ansi = unsafe { GetACP() };
+    if ansi != 0 {
+        return ansi;
+    }
+    65001
+}
+
+/// issue #1064：AppImage 的 `$APPDIR` 旧库经 `LD_LIBRARY_PATH` 置顶后，会随环境
+/// 泄漏给子进程；子进程里的宿主二进制（目录选择器、git/pnpm）于是绑定到镜像内
+/// 更旧的版本符号集，出现 `no version information available`、
+/// `version 'NSSUTIL_3.108' not found`、`OPENSSL_3.5.0 not found`（#1299/#1407）
+/// 一类的加载失败。这里把位于 `$APPDIR` 之下的条目从库搜索路径中剔除。
+#[cfg(target_os = "linux")]
+pub(crate) fn child_library_path(
+    appdir: Option<&std::ffi::OsStr>,
+    library_path: Option<&std::ffi::OsStr>,
+) -> Option<std::ffi::OsString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let library_path = library_path?;
+    let Some(appdir) = appdir.filter(|path| !path.is_empty()) else {
+        return Some(library_path.to_os_string());
+    };
+    Some(
+        std::env::join_paths(
+            library_path
+                .as_bytes()
+                .split(|byte| matches!(*byte, b':' | b';'))
+                .map(|path| Path::new(std::ffi::OsStr::from_bytes(path)))
+                .filter(|path| !path.starts_with(Path::new(appdir))),
+        )
+        .expect("split Linux library paths contain no path separator"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "linux")]
+    use super::child_library_path;
+    use super::decode_process_line;
+    #[cfg(windows)]
+    use super::{decode_multibyte, encode_multibyte, short_path};
+
+    #[cfg(target_os = "linux")]
+    mod appimage_library_path {
+        use super::child_library_path;
+        use std::ffi::{OsStr, OsString};
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        #[test]
+        fn removes_only_appimage_library_directories() {
+            assert_eq!(
+                child_library_path(
+                    Some(OsStr::new("/tmp/.mount_DSH")),
+                    Some(OsStr::new("/opt/custom/lib:/tmp/.mount_DSH/usr/lib:/tmp/.mount_DSH:/tmp/.mount_DSH-other/lib:")),
+                ),
+                Some(OsString::from("/opt/custom/lib:/tmp/.mount_DSH-other/lib:")),
+            );
+        }
+
+        #[test]
+        fn filters_semicolon_and_mixed_library_path_separators() {
+            for path in [
+                "/opt/custom/lib;/tmp/.mount_DSH/usr/lib",
+                "/tmp/.mount_DSH/usr/lib;/opt/custom/lib",
+                "/tmp/.mount_DSH/usr/lib:/opt/custom/lib;/tmp/.mount_DSH/usr/lib64",
+            ] {
+                assert_eq!(
+                    child_library_path(Some(OsStr::new("/tmp/.mount_DSH")), Some(OsStr::new(path))),
+                    Some(OsString::from("/opt/custom/lib")),
+                    "{path}",
+                );
+            }
+        }
+
+        #[test]
+        fn retains_empty_components_and_loader_tokens() {
+            assert_eq!(
+                child_library_path(
+                    Some(OsStr::new("/tmp/.mount_DSH")),
+                    Some(OsStr::new(";/tmp/.mount_DSH/usr/lib;;$ORIGIN/$LIB:;")),
+                ),
+                Some(OsString::from("::$ORIGIN/$LIB::")),
+            );
+        }
+
+        #[test]
+        fn filters_non_utf8_appimage_paths_without_removing_siblings() {
+            assert_eq!(
+                child_library_path(
+                    Some(OsStr::from_bytes(b"/tmp/.mount_\xff")),
+                    Some(OsStr::from_bytes(
+                        b"/tmp/.mount_\xff/usr/lib;/opt/\xfe/lib:/tmp/.mount_\xff-other/lib"
+                    )),
+                ),
+                Some(OsString::from_vec(
+                    b"/opt/\xfe/lib:/tmp/.mount_\xff-other/lib".to_vec()
+                )),
+            );
+        }
+
+        #[test]
+        fn preserves_library_path_without_an_appimage_directory() {
+            let path = Some(OsStr::new("/opt/custom/lib"));
+            assert_eq!(
+                child_library_path(None, path),
+                Some(OsString::from("/opt/custom/lib"))
+            );
+            assert_eq!(
+                child_library_path(Some(OsStr::new("")), path),
+                Some(OsString::from("/opt/custom/lib"))
+            );
+        }
+
+        #[test]
+        fn preserves_an_unset_library_path() {
+            assert_eq!(
+                child_library_path(Some(OsStr::new("/tmp/.mount_DSH")), None),
+                None
+            );
+        }
+
+        #[test]
+        fn clears_a_library_path_containing_only_appimage_directories() {
+            for path in [
+                "/tmp/.mount_DSH/usr/lib",
+                "/tmp/.mount_DSH/usr/lib;/tmp/.mount_DSH/usr/lib64",
+                "",
+            ] {
+                assert_eq!(
+                    child_library_path(Some(OsStr::new("/tmp/.mount_DSH")), Some(OsStr::new(path))),
+                    Some(OsString::new()),
+                    "{path}",
+                );
+            }
+        }
+
+        #[test]
+        fn preserves_non_utf8_user_library_paths() {
+            assert_eq!(
+                child_library_path(
+                    Some(OsStr::new("/tmp/.mount_DSH")),
+                    Some(OsStr::from_bytes(b"/opt/\xff/lib:/tmp/.mount_DSH/usr/lib"))
+                ),
+                Some(OsString::from_vec(b"/opt/\xff/lib".to_vec())),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_window_never_falls_back_to_another_profile() {
+        use crate::service::workflow::instances;
+        use tauri::Manager;
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        for label in ["main", "window-operation-test", "remote-operation-test"] {
+            let window =
+                tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::default())
+                    .build()
+                    .unwrap()
+                    .as_ref()
+                    .window();
+            window
+                .add_child(
+                    tauri::webview::WebviewBuilder::new(
+                        format!("guest-{label}"),
+                        tauri::WebviewUrl::default(),
+                    ),
+                    tauri::LogicalPosition::new(0.0, 0.0),
+                    tauri::LogicalSize::new(800.0, 600.0),
+                )
+                .unwrap();
+            assert!(app.get_webview_window(label).is_none());
+        }
+        assert_eq!(super::shell_window(app.handle()).unwrap().label(), "main");
+        instances::bind_window("main", "operation-main-profile");
+        instances::bind_window("window-operation-test", "operation-extra-profile");
+        instances::bind_window("remote-operation-test", "operation-remote-profile");
+        assert!(super::operation_window(app.handle()).is_none());
+        for (profile, expected) in [
+            ("operation-main-profile", Some("main")),
+            ("operation-extra-profile", Some("window-operation-test")),
+            ("operation-remote-profile", Some("remote-operation-test")),
+            ("operation-missing-profile", None),
+        ] {
+            instances::scope(profile.into(), async {
+                let window = super::operation_window(app.handle());
+                assert_eq!(window.as_ref().map(|window| window.label()), expected);
+            })
+            .await;
+        }
+        for label in ["main", "window-operation-test", "remote-operation-test"] {
+            instances::release_window(label);
+        }
+    }
+
+    #[test]
+    fn keeps_valid_utf8_untouched() {
+        let text = "系统找不到指定的路径。";
+        assert_eq!(decode_process_line(text.as_bytes()), text);
+    }
+
+    #[test]
+    fn invalid_bytes_still_produce_a_line() {
+        assert!(!decode_process_line(&[0xFF, 0xFE, 0x80]).is_empty());
+    }
+
+    /// GBK 字节按显式 936 解码，与 runner 自身的 ANSI 代码页无关。
+    #[cfg(windows)]
+    #[test]
+    fn decodes_gbk_with_an_explicit_codepage() {
+        let gbk = [
+            0xCF, 0xB5, 0xCD, 0xB3, 0xD5, 0xD2, 0xB2, 0xBB, 0xB5, 0xBD, 0xD6, 0xB8, 0xB6, 0xA8,
+            0xB5, 0xC4, 0xC2, 0xB7, 0xBE, 0xB6, 0xA1, 0xA3,
+        ];
+        assert_eq!(
+            decode_multibyte(&gbk, 936).as_deref(),
+            Some("系统找不到指定的路径。")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn encodes_back_to_the_same_codepage_bytes() {
+        let text = "系统找不到指定的路径。";
+        let gbk = encode_multibyte(text, 936).expect("gbk");
+        assert!(!gbk.is_ascii());
+        assert_eq!(decode_multibyte(&gbk, 936).as_deref(), Some(text));
+        // UTF-8 代码页不看 `lpUsedDefaultChar`，直接给出等价字节。
+        assert_eq!(
+            encode_multibyte(text, 65001).as_deref(),
+            Some(text.as_bytes())
+        );
+    }
+
+    /// 该代码页表示不了的字符必须报 `None`，不能靠「近似字符」蒙混过关。
+    #[cfg(windows)]
+    #[test]
+    fn rejects_characters_outside_the_codepage() {
+        assert_eq!(encode_multibyte("小蔡", 437), None);
+    }
+
+    /// 短名只在路径存在且卷上保留 8dot3 时才有；拿不到时调用方按 `is_ascii` 拒绝。
+    #[cfg(windows)]
+    #[test]
+    fn short_path_resolves_existing_paths() {
+        let temp = std::env::temp_dir();
+        let short = short_path(&temp).expect("temp dir always resolves");
+        assert!(short.exists());
+    }
+}

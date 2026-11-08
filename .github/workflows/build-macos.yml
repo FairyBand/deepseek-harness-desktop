@@ -37,15 +37,20 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.id }})
+    # 两个架构各用同架构 runner：`pnpm install` 只落宿主平台的原生可选依赖，
+    # 在 Apple Silicon 上交叉打 x64 会漏掉 `@tailwindcss/oxide-darwin-x64`，
+    # 产物在 Intel 机器上一启动即 `Cannot find native binding`（issue #1326）。
     strategy:
       fail-fast: false
       matrix:
         include:
           - id: macos-aarch64
             target: aarch64-apple-darwin
+            runner: macos-26
           - id: macos-x86_64
             target: x86_64-apple-darwin
-    runs-on: macos-latest
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - name: Filter target architecture
@@ -112,6 +117,15 @@ jobs:
             exit 1
           fi
 
+      - name: Route hdiutil through the flake buffer
+        if: steps.check.outputs.should_run == 'true'
+        shell: bash
+        # runner 上 hdiutil 会随机报 Resource busy / DiskArbitration 超时
+        # (actions/runner-images#7522)，把带重试的同名包装排到 PATH 前面。
+        run: |
+          chmod +x scripts/hdiutil-retry/hdiutil
+          echo "$PWD/scripts/hdiutil-retry" >> "$GITHUB_PATH"
+
       - name: Build package
         if: steps.check.outputs.should_run == 'true'
         env:
@@ -122,30 +136,72 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build ${{ inputs.version != '' && '--config src-tauri/tauri.nightly.conf.json' || '' }} --target ${{ matrix.target }}
+        # 公证走 appstoreconnect.apple.com，runner 偶发 NSURLErrorDomain -1009
+        # "offline" 会让整次打包失败；重试即可规避，非网络类失败立刻放弃。
+        run: |
+          for attempt in 1 2 3; do
+            log="tauri-build-$attempt.log"
+            if pnpm tauri build ${{ inputs.version != '' && '--config src-tauri/tauri.nightly.conf.json' || '' }} --target ${{ matrix.target }} --config src-tauri/tauri.macos-bundle.conf.json 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ] || ! grep -Eq 'Notariz|notarize|NSURLError|Internet connection appears to be offline|codesign' "$log"; then
+              exit 1
+            fi
+            echo "::warning::notarization/reachability failure on attempt $attempt; retrying"
+            sleep 30
+          done
+          exit 1
 
       - name: Verify signature and notarization
         if: steps.check.outputs.should_run == 'true'
         shell: bash
         run: |
-          app_path="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -type d -name '*.app' -print -quit)"
+          app_path="$(find "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -type d -name '*.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo '::error::Built macOS app bundle was not found'
             exit 1
           fi
+          inner_apps=("$app_path"/Contents/Resources/runtime/darwin-*/*.app)
+          [ "${#inner_apps[@]}" -eq 1 ]
+          inner_app="${inner_apps[0]}"
+          for framework in "Electron Framework" Mantle ReactiveObjC Squirrel; do
+            for link in "$framework" Resources Versions/Current; do
+              path="$inner_app/Contents/Frameworks/$framework.framework/$link"
+              if [ ! -L "$path" ]; then
+                echo "::error::Framework symlink was not preserved: $path"
+                exit 1
+              fi
+            done
+          done
+          codesign --verify --deep --strict --verbose=2 "$inner_app"
+          codesign --display --entitlements :- "$inner_app" > "$RUNNER_TEMP/electron-entitlements.plist"
+          python3 -c 'import plistlib, sys; e = plistlib.load(open(sys.argv[1], "rb")); assert all(e.get(key) is True for key in ("com.apple.security.cs.allow-jit", "com.apple.security.cs.disable-library-validation")), e' "$RUNNER_TEMP/electron-entitlements.plist"
+          npm install --prefix "$RUNNER_TEMP/native-addon-smoke" --cache "$RUNNER_TEMP/native-addon-smoke/npm-cache" --no-audit --no-fund node-addon-require-builtin@0.1.9
+          inner_binary=("$inner_app"/Contents/MacOS/*)
+          ELECTRON_RUN_AS_NODE=1 NARB_NATIVE_CACHE_DIR="$RUNNER_TEMP/native-addon-smoke/cache" "${inner_binary[0]}" --eval 'const { createRequire } = require("node:module"); const { resolve } = require("node:path"); const addon = createRequire(resolve(process.argv[1], "package.json"))("node-addon-require-builtin"); require("node:assert/strict").equal(typeof addon.requireBuiltin("internal/modules/esm/loader").getOrInitializeCascadedLoader, "function"); console.log(addon.getBindingInfo());' "$RUNNER_TEMP/native-addon-smoke"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
+          # 原生可选依赖按宿主平台落盘，交叉编译会漏掉目标架构那一份（issue #1326）。
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) oxide=oxide-darwin-arm64 ;;
+            *) oxide=oxide-darwin-x64 ;;
+          esac
+          binding="$(find "$app_path/Contents/Resources/resources/node_modules/@tailwindcss/$oxide" -name '*.node' -print -quit)"
+          if [ -z "$binding" ]; then
+            echo "::error::@tailwindcss/$oxide is missing for ${{ matrix.target }}; the app cannot load its native binding"
+            exit 1
+          fi
 
       - name: Normalize release asset names
         if: steps.check.outputs.should_run == 'true'
-        run: node scripts/rename-release-assets.mjs src-tauri/target/${{ matrix.target }}/release/bundle/dmg
+        run: node scripts/rename-release-assets.mjs apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg
 
       - name: Upload build output
         if: steps.check.outputs.should_run == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.id }}
-          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7

@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop">
-    <img src="public/deepseek-harness-desktop-tauri.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
+    <img src="public/logo.svg" width="96" alt="DeepSeek Harness Tauri Desktop" />
   </a>
 </p>
 
@@ -21,7 +21,7 @@
   <a href="https://github.com/dsh-tauri/deepseek-harness-desktop/releases">
     <img src="https://img.shields.io/github/v/release/dsh-tauri/deepseek-harness-desktop?&label=Release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.2-4d6bfe" alt="DSH recomendado 0.2.1-rc.2" />
+  <img src="https://img.shields.io/badge/DSH-0.2.1--rc.4-4d6bfe" alt="DSH recomendado 0.2.1-rc.4" />
   <img src="https://img.shields.io/github/license/dsh-tauri/deepseek-harness-desktop" alt="MIT License" />
   <br>
   <img src="https://img.shields.io/github/downloads/dsh-tauri/deepseek-harness-desktop/total?&label=downloads&color=4D6BFE" alt="Downloads" />
@@ -45,14 +45,14 @@
 
 ## Características
 
-- 🪶 **Escritorio nativo** — Tauri 2 + React 19 + HeroUI 3, con la interfaz local de Harness integrada.
+- 🪶 **Escritorio nativo** — Tauri 2(Electron Runtime) + React 19 + HeroUI 3, con la interfaz local de Harness integrada.
 - 📱 **Conexión remota** — Escaneá un QR desde Android / iOS para conectarte al DSH de tu computadora por LAN o un túnel público de Cloudflare.
 - 🔄 **Gestión del runtime** — Instalá dependencias, elegí versiones del núcleo y accedé a actualizaciones del escritorio y del núcleo.
 - 🧩 **Gestión de plugins** — 12 plugins integrados; instalación desde directorios locales, desactivación de integrados y gestión de plugins comunitarios.
 - 🗂️ **Configuración por perfiles** — Separá plugins y ajustes, con migración de los datos del perfil en un clic, backup y clonado.
 - 💽 **Directorio de datos** — Elegí la ubicación al instalar en Windows; migrá o revertí los datos desde Ajustes en Windows, macOS y Linux.
 - ⌨️ **Integración con la terminal** — Comandos `dsh` / `pnpm` mediante shims administrados, no una instalación global del núcleo por npm.
-- 🐾 **Mascotas de escritorio** — Recursos Pets / Codex, importación de paquetes y actividad de conversaciones; los recursos predefinidos son remotos.
+- 🐾 **Mascotas de escritorio** — Las aporta el plugin preset `dsh-pet-lite`, ver plugins preset más abajo.
 - 🎨 **Personalización** — 8 paletas, escala de interfaz local, modo terminal, opacidad ajustable y desenfoque esmerilado opcional.
 
 ## Plugins integrados
@@ -61,12 +61,10 @@ Plugins propios distribuidos con los recursos del escritorio:
 
 - [DSH Tauri](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri) — Plugin central: comunicación del escritorio con Harness, adaptadores de versión y gestión de dependencias de plugins
 - [DSH Tauri UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-ui) — Interfaz de ajustes del escritorio, componentes nativos del núcleo, temas y paletas
-- [DSH Tauri Mobile UI](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-mobile-ui) — Diseños táctiles y preferencias móviles
 - [DSH Tauri Worktree](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-worktree) — Worktrees Git por sesión y checkout
 - [DSH Tauri Extension](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-extension) — Gestor oficial de plugins, mercado de plugins, Skills y MCP
-- [DSH Tauri Scheduler](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-scheduler) — Tareas programadas e historial
 - [DSH Tauri Archive](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-archive) — Archivo y restauración de chats
-- [DSH Tauri Pet](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-pet) — Ajustes de mascotas y estados de actividad
+- [DSH Pet Lite](https://github.com/hairyf/dsh-pet-lite) — Plugin de mascota de escritorio ligero; instálalo desde la página de plugins
 - [DSH Tauri Rightclick Menu](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-rightclick) — Menús contextuales de sesiones, workspaces y texto
 - [DSH Tauri Model](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-model) — Selección de modelos, parámetros y configuración automática
 - [DSH Tauri Remote](https://github.com/dsh-tauri/deepseek-harness-desktop/tree/main/packages/dsh-tauri-remote) — Conexiones Harness remotas y sincronización por SSH, además de compartir el Harness local por LAN o túnel público
@@ -77,12 +75,12 @@ Plugins propios distribuidos con los recursos del escritorio:
 El asistente ofrece los siguientes plugins comunitarios para instalar a demanda.
 
 - [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — Barra lateral del editor por sesión
-- [Billion Context](https://github.com/ranxianglei/billion-context) — Compresión de contexto y restauración del historial
 - [DSH Office Kit](https://github.com/hairyf/dsh-office-kit) — Documentos de Office, PDF, presentaciones y hojas de cálculo
 - [DSH Market](https://github.com/dsh-market/dsh-market) — Mercado de plugins comunitarios
 - [DSH Rewind](https://github.com/SiriLee/dsh-rewind) — Retroceso de conversación y backups del workspace
 - [DSH IM](https://github.com/xmanrui/dsh-im) — Canales IM y gestión de bots
 - [DSH OPS](https://github.com/T-Auto/dsh-ops) — Herramientas de operaciones de bajo nivel para reducir el consumo de tokens y el tiempo de ejecución
+- [Billion Context](https://github.com/ranxianglei/billion-context) — Compresión de contexto y restauración del historial
 
 Pedí preajustes nuevos o actualizados mediante [Issues](https://github.com/dsh-tauri/deepseek-harness-desktop/issues). Las versiones disponibles siguen las reglas de compatibilidad del manifiesto.
 
@@ -92,9 +90,9 @@ Descargá el instalador de tu plataforma y arquitectura desde [Releases](https:/
 
 | Plataforma | Requisitos | Instalador |
 | --- | --- | --- |
-| Windows | Windows 10+, WebView2 | x64 `.exe` / `.msi` |
-| macOS | macOS 12+; la interfaz web necesita capacidades de Safari 17.4+ | Intel / Apple Silicon `.dmg` |
-| Linux | Bibliotecas de runtime WebKit2GTK 4.1 | x64 `.AppImage` / `.deb` |
+| Windows | Windows 10+ (motor Chromium integrado) | x64 `.exe` / `.msi` |
+| macOS | macOS 12+ (motor Chromium integrado) | Intel / Apple Silicon `.dmg` |
+| Linux | Motor Chromium integrado | x64 `.AppImage` / `.deb` |
 
 En macOS también podés instalar por Homebrew:
 
@@ -142,8 +140,8 @@ Windows muestra los errores de inicio en un diálogo nativo. Para `STARTUP_LOW_I
 
 | Base actual | Versión |
 | --- | --- |
-| Núcleo Harness recomendado | `0.2.1-rc.2` |
-| Núcleo mínimo compatible | `0.1.7-rc.1`; no garantiza compatibilidad con todos los plugins |
+| Núcleo Harness recomendado | `0.2.1-rc.4` |
+| Núcleo mínimo compatible | `0.2.1-rc.4`; no garantiza compatibilidad con todos los plugins |
 
 Los núcleos anteriores ya no son compatibles. Los registros previos describen hechos históricos, no el soporte actual.
 
@@ -183,7 +181,8 @@ Consultá la [guía en inglés](<./docs/DEVELOPMENT.md>) o la [guía en chino](<
 
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — plataforma agent `dsh` oficial
 - [deepseek-harness-pkg](https://github.com/dsh-tauri/deepseek-harness-pkg) — distribuciones Harness prearmadas y fuente de descarga
-- [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-mov](https://github.com/dsh-tauri/dsh-pet-mov) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — recursos y render de mascotas
+- [electron-rs](https://github.com/hairyf/electron-rs) · [tauri-runtime-electron](https://github.com/hairyf/tauri-runtime-electron) — Electron Rust y el runtime Electron para Tauri 2
+- [dsh-pet-lite](https://github.com/hairyf/dsh-pet-lite) · [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) · [dsh-pet-component](https://github.com/dsh-tauri/dsh-pet-component) — plugin, recursos y render de mascotas
 - [dsh-plugin-codex-pets](https://github.com/Skylarking/dsh-plugin-codex-pets) · [BongoCat](https://github.com/ayangweb/BongoCat) · [dsh-dafeiyu](https://github.com/QCYTSN/dsh-dafeiyu) · [codex-to-dsh-pet](https://github.com/Signalight/codex-to-dsh-pet) — proyectos de referencia de mascotas
 
 ## Contributors

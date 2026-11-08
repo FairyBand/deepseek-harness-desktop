@@ -1,0 +1,252 @@
+{
+  "engines": {
+    "dsh": {
+      // 离线包随包内核、下载目标与更新提示都跟随 pkg 仓库的最新稳定发行版；
+      // 清单不再声明「推荐版本」，也没有固定的随包版本。
+      "minimum": "0.2.2-rc.1"
+    },
+    "pnpm": {
+      "version": ">=11.7.0",
+      "sha256": "deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee"
+    },
+    "git": {
+      "version": ">2.53.0.2",
+      "sha256": {
+        "x64": "d4bf83d6a860ccae9af44e508e1e00a39f09db6fa78a9ba5543b94d87ca22a29",
+        "arm64": "842d50edc6bbcf39693e60a8ebb9dabb89b96b932b63aae12d218522b3e497f3"
+      }
+    }
+  },
+  "dependencies": {
+    // 依赖映射规范：AppData 的 dependencies.json 只记录每个依赖的安装根
+    // （null = 用系统环境）；入口相对路径与默认托管根以本表为准。
+    // managedRoot / 映射值支持三种形态：
+    //   $AppData/...    AppData 数据目录（debug 构建为 <base>/dev 的同级）
+    //   $Resources/...  安装包资源目录（`resources/...` 为等价旧写法）
+    //   绝对路径         任意位置（如加载本地捆绑版内核）
+    "pnpm": {
+      "engine": ">=11.7.0",
+      "entry": "bin/pnpm.cjs",
+      "managedRoot": "$AppData/dependencies/pnpm",
+      "overridable": true
+    },
+    "dsh": {
+      "engine": {
+        "minimum": "0.2.2-rc.1"
+      },
+      "entry": "node_modules/@deepseek-ai/dsh/lib/bin.js",
+      "managedRoot": "$AppData/dependencies/dsh",
+      "overridable": true
+    },
+    "git": {
+      "engine": ">2.53.0.2",
+      "entry": {
+        "windows": "cmd/git.exe",
+        "default": "bin/git"
+      },
+      "managedRoot": "$AppData/dependencies/git",
+      "overridable": true
+    }
+  },
+  "plugins": {
+    "depercated": [
+      "dsh-win-terminal-inspector",
+      "dsh-session-context-menu",
+      "@baihejiangnan/dsh-session-context-menu",
+      "dsh-tauri-model-config",
+      "dsh-tauri-taiwindcss",
+      "dsh-tauri-session",
+      "dsh-tauri-ssh",
+      "dsh-tauri-panel",
+      "dsh-tauri-panel-extension",
+      "dsh-tauri-panel-scheduler",
+      "dsh-tauri-ssh-ui",
+      "dsh-tauri-turnrewind",
+      "dsh-tauri-connection",
+      "dsh-tauri-bridge",
+      "dsh-tauri-running-changes",
+      "dsh-tauri-kernel",
+      "dsh-tauri-mobile-ui",
+      "dsh-tauri-scheduler",
+      "dsh-tauri-pet",
+      "dsh-tauri-worktree"
+    ],
+    "built-in": [
+      {
+        "id": "dsh-taiwind",
+        "spec": "dsh-taiwind",
+        "name": "DSH Tailwind",
+        "repo": "https://github.com/hairyf/dsh-taiwind"
+      },
+      {
+        "id": "dsh-tauri",
+        "spec": "dsh-tauri",
+        "name": "DSH Tauri",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri"
+      },
+      {
+        "id": "dsh-tauri-ui",
+        "spec": "dsh-tauri-ui",
+        "name": "DSH Tauri UI",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-ui"
+      },
+      {
+        "id": "dsh-tauri-extension",
+        "spec": "dsh-tauri-extension",
+        "name": "DSH Tauri Extension",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-extension"
+      },
+      {
+        "id": "dsh-tauri-archive",
+        "spec": "dsh-tauri-archive",
+        "name": "DSH Tauri Archive",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-archive"
+      },
+      {
+        "id": "dsh-tauri-rightclick",
+        "spec": "dsh-tauri-rightclick",
+        "name": "DSH Tauri Rightclick Menu",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-rightclick"
+      },
+      {
+        "id": "dsh-tauri-model",
+        "spec": "dsh-tauri-model",
+        "name": "DSH Tauri Model",
+        "repo": "https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-model"
+      },
+      {
+        "id": "dsh-tauri-remote",
+        "spec": "dsh-tauri-remote",
+        "name": "DSH Tauri Remote",
+        "repo": "https://github.com/dsh-tauri-desk/deepseek-harness-desktop/tree/main/packages/dsh-tauri-remote"
+      },
+      {
+        "id": "dsh-tauri-notification",
+        "spec": "dsh-tauri-notification",
+        "name": "DSH Tauri Notification",
+        "repo": "https://github.com/dsh-tauri-desk/deepseek-harness-desktop/tree/main/packages/dsh-tauri-notification"
+      }
+    ],
+    "preset": [
+      {
+        "id": "dsh-neartoken",
+        "spec": "dsh-neartoken",
+        "name": "DSH NearToken",
+        "description": "把 New API 站点接入 DSH 的模型供应商：设备授权登录、按渠道分组的三级模型/分组/推理强度选择器与模型白名单。 ｜ Sign in to a New API deployment (NearToken) from the settings page: device authorization, a three-level model / group / reasoning-effort picker, and a model whitelist.",
+        "repo": "https://github.com/HuanLinOTO/dsh-neartoken",
+        "recommended": true,
+        "checked": true,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-better-sidebar",
+        "spec": "dsh-better-sidebar",
+        "name": "DSH Better Sidebar",
+        "description": "开放的侧边栏底座，支持三方拓展注册新侧边栏页面。内置文件渲染编辑/终端/侧边对话/Git/子代理页面 ｜ Open sidebar foundation, supports third-party extensions to register new sidebar pages. Built-in file rendering/editing, terminal, side chat, Git, and sub-agent pages.",
+        "repo": "https://github.com/omdsh-dev/DSH-better-sidebar",
+        "recommended": true,
+        "checked": true,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-rewind-plugin",
+        "spec": "dsh-rewind-plugin",
+        "name": "DSH Rewind",
+        "description": "便捷无感的同窗口内对话回退，从不新建分支；自带轻量工作区备份，可一并还原文件（Claude Code /rewind 语义）。 · DSH plugin: effortless in-window conversation rewind — never forking a new session; ships a lightweight workspace backup that restores files together with the rewind (Claude Code /rewind semantics).",
+        "repo": "https://github.com/SiriLee/dsh-rewind",
+        "recommended": true,
+        "checked": true,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-office-kit",
+        "spec": "dsh-office-kit",
+        "name": "DSH Office Kit",
+        "description": "Office documents, PDF, presentations, and spreadsheets for DeepSeek Harness",
+        "repo": "https://github.com/hairyf/dsh-office-kit",
+        "recommended": true,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-ops",
+        "spec": "dsh-ops",
+        "name": "DSH Optimize",
+        "description": "dsh-ops 底层操作工具插件，旨在减少 Token 消耗与任务耗时。 ｜ A toolkit for low-level operations in DSH, designed to reduce token usage and task execution time.",
+        "repo": "https://github.com/T-Auto/dsh-ops",
+        "recommended": true,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-third-kernel",
+        "spec": "dsh-third-kernel@0.1.0",
+        "name": "DSH Third Kernel",
+        "description": "接入本机已登录的 Codex 与 Claude Code，切换第三方内核会话、模型与推理强度，沿用 DSH 会话权限。 ｜ Use local Codex and Claude Code kernels with native model selection, reasoning controls, and DSH session permissions.",
+        "repo": "https://github.com/hairyf/dsh-third-kernel",
+        "recommended": true,
+        "checked": false
+      },
+      {
+        "id": "dshmarket",
+        "spec": "dshmarket",
+        "name": "DSH Market",
+        "repo": "https://github.com/dsh-market/dsh-market",
+        "description": "The plugin market inside DeepSeek Harness — browse, search, one-click install · DSH 可视化插件市场",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-pet-lite",
+        "spec": "dsh-pet-lite",
+        "name": "DSH Pet Lite",
+        "description": "轻量桌宠插件：设置页分区、会话活动驱动的动画，以及一个透明置顶的桌宠窗口。 ｜ Lightweight desktop pet with a settings section, session-activity animations, and a transparent always-on-top window.",
+        "repo": "https://github.com/hairyf/dsh-pet-lite",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "@xmanrui/dsh-im",
+        "spec": "@xmanrui/dsh-im",
+        "name": "DSH IM",
+        "description": "通过扫码或机器人凭据把IM机器人接入DeepSeek Harness（支持飞书、微信、钉钉、企业微信、QQ、Slack、Telegram、Discord和WhatsApp）。 Connect IM bots to DeepSeek Harness via QR code or credentials (9 channels).",
+        "repo": "https://github.com/xmanrui/dsh-im",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "@changfenhuang/dsh-genui",
+        "spec": "@changfenhuang/dsh-genui",
+        "name": "DSH GenUI",
+        "description": "交互式界面插件，通过 dsh-ui 代码块在助手回复中直接呈现布局、图表、绘图、表单、测验、Mermaid 和 3D 场景，并将交互事件回传模型。内含宿主插件、浏览器渲染器和 genui 技能。 ｜ GenUI for DeepSeek Harness: interactive UI components rendered inline in assistant replies via the dsh-ui fence — layout, charts, plots, forms, quizzes, mermaid, 3D scenes, and an action event loop back to the model. Ships the fence-teaching host plugin, the browser renderer (client half), and the genui skill.",
+        "repo": "https://github.com/omdsh-dev/dsh-genui",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "dsh-context",
+        "spec": "dsh-context",
+        "name": "DSH Context",
+        "description": "一站式 DeepSeek Harness 上下文可视化插件，Context 面板及浏览器和侧边栏与 Context 命令，透视上下文组成、演进、压缩、剪枝等事件与动作。 ｜ The best DeepSeek Harness plugin for context insight and management, with context dashboard / browser / sidebar and context command, for context statistics, composition, breakdown, evolution details, understanding how the context is made of, and how it evolves.",
+        "repo": "https://github.com/bowenliang123/dsh-context",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      },
+      {
+        "id": "billion-context",
+        "spec": "billion-context",
+        "name": "Billion Context",
+        "description": "基本稳定可用。上下文压缩插件，兼顾小窗口（100K 上下文足矣）、节省 Token（用量减少至约五分之一）和超长会话（数月级别、几十亿 Token 单会话）。 ｜ A context-compression plugin for small context windows (a 100K context is enough), token savings (5x fewer tokens), and month-long single sessions (billions of tokens). billion-context is all you need",
+        "repo": "https://github.com/ranxianglei/billion-context",
+        "recommended": false,
+        "checked": false,
+        "version": "latest"
+      }
+    ]
+  }
+}

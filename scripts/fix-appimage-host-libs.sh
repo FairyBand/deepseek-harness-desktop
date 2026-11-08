@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-#
-# 剔除 AppImage 内过度打包的「宿主接口」显示栈库（上游 tauri#15976，本仓 #620）。
-#
-# Tauri 固定使用的 linuxdeploy 会把构建镜像（ubuntu-22.04）的
-# libwayland-*、libxkbcommon、libxcb-{randr,render,shm}、libXau、libXdmcp
-# 一并塞进 usr/lib，而 AppRun.wrapped 又把 $APPDIR/usr/lib 放在 LD_LIBRARY_PATH
-# 首位。较新发行版（Arch/CachyOS、Fedora 44…）的宿主 Mesa 因此加载到这些旧库，
-# EGL 协商失败；WebKit 把 eglGetDisplay 失败当作致命错误直接 abort()，于是
-# WebKitWebProcess 以 SIGABRT 退出、主窗口从未出现，用户侧看不到任何运行日志。
-# 宿主安装包（.deb/.rpm）用系统 WebKit + 系统库，因此不受影响。
-#
-# 这 10 个库是「宿主 ↔ 驱动」的接口，必须用宿主版本（ABI 上向下兼容的落地替换，
-# tauri#15976 已用同一份最小集合复现修复）。libEGL/libGL/libgbm/libdrm 不在剔除
-# 之列：linuxdeploy 自带的 excludelist 本来就没有打包它们，误删反而会破坏渲染。
-#
-# 重打包复用原 AppImage 自带的 runtime 前缀（head -c <offset>），不调用
-# appimagetool：既不用额外下载，也不依赖上游 floating tag，结果可复现。
 set -euo pipefail
 
 readonly EXCLUDED_LIBS=(
@@ -38,6 +21,20 @@ readonly GTK_HOOK=apprun-hooks/linuxdeploy-plugin-gtk.sh
 readonly GDK_OVERRIDE_PATTERN='^[[:space:]]*export[[:space:]]+GDK_BACKEND=x11([[:space:]]+#.*)?[[:space:]]*$'
 readonly GSTREAMER_SOURCE_PATTERN='^[[:space:]]*source[[:space:]].*apprun-hooks/linuxdeploy-plugin-gstreamer[.]sh[[:space:]]*$'
 readonly GSTREAMER_NATIVE_PATTERN='GST_PLUGIN_SYSTEM_PATH(_1_0)?='
+# #1269：宿主 GStreamer(>=1.24) 链接新版 GLib，镜像里 22.04 的 GLib 2.72 被 LD_LIBRARY_PATH 置顶后缺 g_once_init_leave_pointer，加载器在 main() 前中止。
+# #1299：同时交还宿主依赖，避免新版 GIO 继续加载缺少 MOUNT_2_40 等符号的旧库。
+readonly EXCLUDED_GLIB=(
+  'libglib-2.0.so*'
+  'libgobject-2.0.so*'
+  'libgio-2.0.so*'
+  'libgmodule-2.0.so*'
+  'libgthread-2.0.so*'
+  'libmount.so*'
+  'libpcre2-8.so*'
+  'libselinux.so*'
+  'libsystemd.so*'
+  'libdbus-1.so*'
+)
 readonly EXCLUDED_MEDIA=(
   'libgst*.so*'
   gstreamer-1.0
@@ -45,6 +42,39 @@ readonly EXCLUDED_MEDIA=(
   gst-plugin-scanner
   gst-ptp-helper
   linuxdeploy-plugin-gstreamer.sh
+  'libsoup-2.4.so*'
+  'libgupnp*.so*'
+)
+# #1407：镜像只打包了半个 NSS（无 libsoftokn3/libfreebl3），宿主 softoken 在镜像内旧
+# libnssutil3 之下缺 NSSUTIL_3.108 版本符号，加载失败后 Chromium 在 crypto/nss_util.cc
+# 触发 int3（SIGTRAP，实测 Fedora 45 / Arch）。deb 不打包 NSS 且正常，故交还宿主。
+# 注意勿写成 libnss*.so*：那会命中 glibc 的 libnss_files.so.2 等 name service 模块。
+readonly EXCLUDED_NSS=(
+  'libnss3.so*'
+  'libnssutil3.so*'
+  'libsmime3.so*'
+  'libnspr4.so*'
+  'libplc4.so*'
+  'libplds4.so*'
+)
+# 镜像内 OpenSSL 3.0 / krb5 早于宿主 libcurl、git 所需的 OPENSSL_3.5.0 与
+# krb5support_0_MIT k5_buf_cstring：LD_LIBRARY_PATH 置顶后宿主 git-remote-https
+# 直接 `fatal: remote helper 'https' aborted session`，git 托管插件安装全灭。
+readonly EXCLUDED_CRYPTO=(
+  'libssl.so.3*'
+  'libcrypto.so.3*'
+  'libkrb5.so.3*'
+  'libk5crypto.so.3*'
+  'libkrb5support.so.0*'
+  'libgssapi_krb5.so.2*'
+  'libkeyutils.so.1*'
+)
+readonly EXCLUDED_ALL=(
+  "${EXCLUDED_LIBS[@]}"
+  "${EXCLUDED_GLIB[@]}"
+  "${EXCLUDED_MEDIA[@]}"
+  "${EXCLUDED_NSS[@]}"
+  "${EXCLUDED_CRYPTO[@]}"
 )
 
 # 在镜像中扫描 squashfs 4.0 superblock：magic "hsqs"，版本字段 s_major/s_minor == 4/0，
@@ -162,8 +192,8 @@ if [ ! -d "$tree" ]; then
 fi
 
 removed=()
-# #1209：整套媒体栈交给宿主，避免版本混用。
-for lib in "${EXCLUDED_LIBS[@]}" "${EXCLUDED_MEDIA[@]}"; do
+# #1209：整套媒体栈交给宿主，避免版本混用。#1165：libsoup-2.4 混进 WebKitGTK 的 libsoup-3 进程会 SIGTRAP，打包物里不得残留。
+for lib in "${EXCLUDED_ALL[@]}"; do
   while IFS= read -r -d '' found; do
     rm -rf "$found"
     removed+=("${found#"$tree"/}")
@@ -239,12 +269,24 @@ else
   fi
 fi
 
-for lib in "${EXCLUDED_LIBS[@]}" "${EXCLUDED_MEDIA[@]}"; do
+for lib in "${EXCLUDED_ALL[@]}"; do
   if find "$verified" -name "$lib" -print -quit | grep -q .; then
     echo "fix-appimage-host-libs: verification failed, $lib is still bundled" >&2
     verdict=1
   fi
 done
+if find "$verified" -type f \( -name 'libgstsoup.so' -o -name 'libgstwebrtc.so' \) -print -quit | grep -q .; then
+  echo "fix-appimage-host-libs: verification failed, libsoup-2.4 GStreamer plugins are still bundled (#1165)" >&2
+  verdict=1
+fi
+if command -v readelf >/dev/null 2>&1; then
+  while IFS= read -r -d '' elf; do
+    if readelf -d "$elf" 2>/dev/null | grep -q 'NEEDED.*libsoup-2[.]4'; then
+      echo "fix-appimage-host-libs: verification failed, ${elf#"$verified"/} still links libsoup-2.4 (#1165)" >&2
+      verdict=1
+    fi
+  done < <(find "$verified/usr" -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
+fi
 if [ -f "$verified/AppRun.wrapped" ] && grep -aEq "$GSTREAMER_NATIVE_PATTERN" "$verified/AppRun.wrapped"; then
   echo "fix-appimage-host-libs: verification failed, native AppRun still overrides the host GStreamer path" >&2
   verdict=1
@@ -262,13 +304,40 @@ if [ "$hook_changed" -eq 1 ] && [ ! -f "$verified/$GTK_HOOK" ]; then
   verdict=1
 fi
 for required in AppRun AppRun.wrapped; do
-  if [ ! -e "$verified/$required" ]; then
-    echo "fix-appimage-host-libs: verification failed, $required is missing" >&2
+  if [ ! -f "$verified/$required" ] || [ ! -x "$verified/$required" ]; then
+    echo "fix-appimage-host-libs: verification failed, $required is missing or not executable" >&2
     verdict=1
   fi
 done
-if [ ! -e "$verified/usr/lib/libwebkit2gtk-4.1.so.0" ]; then
-  echo "fix-appimage-host-libs: verification failed, bundled WebKit is missing" >&2
+if ! python3 - "$verified" <<'PY_ELECTRON'
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+
+root = Path(sys.argv[1])
+markers = list((root / 'usr/lib').glob('*/runtime/linux-*/electron-rs.json'))
+if len(markers) != 1:
+    sys.exit('fix-appimage-host-libs: verification failed, expected one bundled Linux Electron runtime')
+dist = markers[0].parent
+metadata = json.loads(markers[0].read_text())
+arch = metadata.get('arch')
+if metadata.get('target') != 'linux' or arch not in ('x64', 'arm64') or dist.name != f'linux-{arch}':
+    sys.exit('fix-appimage-host-libs: verification failed, incompatible Electron runtime metadata')
+binary = dist / metadata['binary']
+if not binary.resolve().is_relative_to(dist.resolve()) or not binary.is_file() or not os.access(binary, os.X_OK):
+    sys.exit('fix-appimage-host-libs: verification failed, Electron executable is missing or not executable')
+with binary.open('rb') as handle:
+    header = handle.read(20)
+if len(header) < 20 or header[:6] != b'\x7fELF\x02\x01' or struct.unpack_from('<H', header, 18)[0] != {'x64': 62, 'arm64': 183}[arch]:
+    sys.exit('fix-appimage-host-libs: verification failed, incompatible Electron ELF executable')
+for required in ('main.cjs', 'preload.cjs', 'icudtl.dat', 'resources.pak', 'libffmpeg.so', 'libvulkan.so.1', 'libvk_swiftshader.so', 'vk_swiftshader_icd.json'):
+    path = dist / required
+    if not path.is_file() or path.stat().st_size == 0:
+        sys.exit(f'fix-appimage-host-libs: verification failed, Electron {required} is missing or empty')
+PY_ELECTRON
+then
   verdict=1
 fi
 if ! find "$verified/usr/bin" -type f -perm -u+x -print -quit | grep -q .; then

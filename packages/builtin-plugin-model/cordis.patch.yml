@@ -1,0 +1,14 @@
+- id: ui-settings-models
+  disabled: !!js |
+    (() => {
+      const entry = ctx[Symbol.for('cordis.entry')]
+      const model = entry.parent.tree.root.data.find(item => item.id === 'dsh-tauri-model')
+      const disabled = model?.disabled
+      return !!model && !(disabled && typeof disabled === 'object' && '__jsExpr' in disabled ? entry.evaluate(disabled.__jsExpr) : disabled)
+    })()
+
+- insert:
+    - id: dsh-tauri-model
+      name: dsh-tauri-model
+    - id: dsh-taiwind
+      name: dsh-taiwind

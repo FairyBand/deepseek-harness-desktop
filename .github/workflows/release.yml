@@ -1,19 +1,19 @@
 name: Build & Release
 
 on:
-  # 正式发布：推送 v* tag，或合并 release/* PR。
+  # 正式发布：推送 v* tag，或合并 release/* PR（bumpp --pr 闭环）。
   push:
     tags:
       - 'v*'
-  # branches 只能过滤目标分支；版本文件过滤减少无关 PR 产生的空 workflow run，
-  # prepare job 再校验源分支、仓库与 merged 状态。
+  # bumpp --pr 的合并闭环：release/* PR 合并后在此建 tag 并发布。
+  # paths 只减少无关 PR 关闭产生的空 run，prepare 再校验 merged / 同仓 / 分支前缀。
   pull_request:
     types: [closed]
     paths:
       - package.json
-      - src-tauri/Cargo.toml
-      - src-tauri/Cargo.lock
-      - src-tauri/tauri.conf.json
+      - apps/desktop/src-tauri/Cargo.toml
+      - apps/desktop/src-tauri/Cargo.lock
+      - apps/desktop/src-tauri/tauri.conf.json
   # 手动触发：创建预发布测试构建。
   workflow_dispatch:
     inputs:
@@ -69,6 +69,7 @@ jobs:
           PUSH_TAG: ${{ github.ref_name }}
         run: node scripts/release-identity.mjs
 
+      # PR 合并建 tag：bumpp --pr 不在本地打 tag，由这里在 merge commit 上建。
       - name: Create release tag
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
@@ -113,7 +114,8 @@ jobs:
           ### 📦 Artifacts
           - **macOS (Apple Silicon)**: 下载 `aarch64.dmg`
           - **macOS (Intel)**: 下载 `x64.dmg`
-          - **Windows**: 下载 `.exe`
+          - **Windows (x64)**: 下载 `_x64-setup.exe`
+          - **Windows (ARM64)**: 下载 `_arm64-setup.exe`
           - **Linux (x64)**: 下载 `.AppImage` 或 `.deb`（基于 Ubuntu 22.04 构建）
           - **Linux (ARM64)**: 下载 `aarch64.AppImage` 或 `arm64.deb`（基于 Ubuntu 22.04 构建，GLIBC 符号上限 2.35）
           - **Android**: 桌面端发布后追加 `.apk`；未配置签名密钥时使用开发证书，仅供评估

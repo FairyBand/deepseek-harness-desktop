@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DSH Tauri",
+  "version": "0.31.1",
+  "identifier": "dsh-tauri",
+  "build": {
+    "beforeBuildCommand": "pnpm -w build:plugins && pnpm build",
+    "beforeBundleCommand": "node ../../crates/tauri-runtime-electron/tools/macos-sign/sign.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "dsh"
+        ]
+      }
+    },
+    "notifications": {
+      "windows": {
+        "toastActivatorClsid": "4FBB68DF-E119-4FBB-82D5-FA10F85B519B",
+        "iconPath": "icons/32x32.png"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": {
+      "target/electron": "runtime",
+      "resources": "resources",
+      "icons/32x32.png": "icons/32x32.png"
+    },
+    "licenseFile": "licenses/INSTALLER-LICENSE.txt",
+    "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
+    },
+    "windows": {
+      "nsis": {
+        "template": "templates/installer.nsi",
+        "languages": [
+          "English",
+          "SimpChinese"
+        ],
+        "customLanguageFiles": {
+          "English": "templates/languages/English.nsh",
+          "SimpChinese": "templates/languages/SimpChinese.nsh"
+        },
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "zenity"
+        ],
+        "conflicts": [
+          "deepseek-harness-desktop"
+        ],
+        "replaces": [
+          "deepseek-harness-desktop"
+        ],
+        "postInstallScript": "templates/linux/postinst.sh",
+        "postRemoveScript": "templates/linux/postrm.sh",
+        "desktopTemplate": "templates/linux/main.desktop"
+      }
+    }
+  }
+}

@@ -1,3 +1,8 @@
+> WARNING: 桌面端已采用 Electron 架构，禁止合并或使用旧版主分支的非 Electron 架构代码。
+
+> INFO: crates/ 目录所有子仓库，是你的一体，你需要作为整体进行管理（提交、合并、推送、拉取等）。
+>       当要你提交推送时，代表提交推送所有子仓库的代码，并完成后，更新本仓库指针到最新版本，然后提交本仓库。
+
 ## Workspace Routing & Context Guidelines
 
 在执行代码分析、优化、重构或单测编写前，必须根据修改对象的**路径、业务域与环境**，主动读取并叠加遵循对应的规范文档：
@@ -13,7 +18,6 @@
 | **桌面端 - 测试验证** | 桌面端 E2E 测试、UI 单元测试、桌面功能测试 | `docs/specs/desktop.test.md` |
 | **插件 - 基础架构** | 插件常量归属、跨侧共享约定与退级策略 | `docs/specs/plugin.baisc.md` |
 | **插件 - 客户端核心** | 插件 Client 通信、状态管理与客户端逻辑 | `docs/specs/plugin.client.md` |
-| **插件 - 客户端面板** | 插件 Panel 视图组件、交互面板 UI | `docs/specs/plugin.client.panel.md` |
 | **插件 - 宿主核心** | 宿主进程管理、插件加载器、沙箱隔离 | `docs/specs/plugin.host.md` |
 | **插件 - 宿主服务** | 宿主系统级 Service、底座 API 实现 | `docs/specs/plugin.host.service.md` |
 | **插件 - 测试套件** | 插件 Mock 测试、沙箱运行测试、集成测试 | `docs/specs/plugin.test.md` |
@@ -37,8 +41,6 @@
    - 若需要临时记录、存放中间分析过程或草稿，可随意在 `.temp` 文件中编写（该文件下拥有绝对自由度）。
 4. **插件开发保护**：
    - 在处理或重构插件相关代码时，**切勿执行构建（Build）命令**（用户可能正处于 Dev 开发热重载状态）。
-
----
 
 ## 沟通与评论规范 (Reply & Comment Rules)
 

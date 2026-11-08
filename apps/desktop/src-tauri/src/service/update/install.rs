@@ -1,0 +1,2015 @@
+//! 安装包下载、完整性校验与交付系统处理器打开。
+//!
+//! 下载源策略：先取 `expanded_assets` 页面的 SHA-256 摘要作为完整性凭据，再选择
+//! 下载源——镜像兜底（GitHub 代理镜像）仅在已取得可信摘要时才可使用，否则宁可失败，
+//! 防止第三方镜像投毒未被察觉；官方 GitHub 直连在摘要缺失时仍可按旧行为下载，
+//! 下载后若有摘要则强制校验。
+
+use crate::AppHandle;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
+
+use crate::config;
+use crate::service::workflow;
+
+use super::meta::{LatestRelease, fetch_latest_release};
+use super::version::current_version;
+#[cfg(target_os = "linux")]
+use super::version::{running_appimage, self_updatable};
+use super::{DOWNLOAD_TIMEOUT_SECS, UPDATES_DIR};
+
+/// 就地替换不了的媒介不发起更新：系统包安装（非 deb/rpm 宿主，或当前二进制不归该
+/// 家族的包管理）下载的任何格式都只会「另跑一份」，桌面条目仍指向旧版本，用户点完
+/// 「立即更新」版本号没变。
+///
+/// 检查、下载、打开安装包三条入口都要先过这一步：只拦在 [`check`] 里时，直接调
+/// `download_desktop_update` 的调用方仍会先下载并登记「待安装」，退出应用时又把这个
+/// 白下的包拉起来。必须报错而不是返回 `Ok(None)`——后者会被读成「已是最新」。
+fn ensure_self_updatable() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if !self_updatable() {
+        return Err(
+            "UPDATE_MEDIA_UNSUPPORTED: current install cannot be replaced in place; update through the channel it was installed from"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// 安装包目录（AppData/updates，不存在则创建）
+fn updates_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("UPDATE_DIR: {e}"))?
+        .join(UPDATES_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("UPDATE_DIR: {e}"))?;
+    Ok(dir)
+}
+
+fn prune_installers_in_dir(dir: &std::path::Path, protected: &[PathBuf]) -> std::io::Result<()> {
+    let root = dunce::canonicalize(dir)?;
+    let protected: Vec<_> = protected
+        .iter()
+        .filter_map(|path| dunce::canonicalize(path).ok())
+        .collect();
+    let mut installers = Vec::new();
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "exe" | "msi" | "dmg" | "appimage" | "deb" | "rpm"
+        ) {
+            continue;
+        }
+        let canonical = dunce::canonicalize(&path)?;
+        if canonical.parent() != Some(root.as_path()) {
+            continue;
+        }
+        installers.push((
+            protected.contains(&canonical),
+            entry.metadata()?.modified()?,
+            path,
+        ));
+    }
+    installers.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    for (protected, _, path) in installers.into_iter().skip(5) {
+        if protected || dunce::canonicalize(&path)?.parent() != Some(root.as_path()) {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_file(&path) {
+            log::warn!("UPDATE_PRUNE: failed to remove {}: {error}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn prune_old_installers(app_handle: &AppHandle) {
+    let mut protected: Vec<_> = super::pending::installer_path(app_handle)
+        .into_iter()
+        .collect();
+    if let Ok(executable) = std::env::current_exe() {
+        protected.push(executable);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        protected.push(PathBuf::from(appimage));
+    }
+    let result = updates_dir(app_handle).and_then(|dir| {
+        prune_installers_in_dir(&dir, &protected).map_err(|error| error.to_string())
+    });
+    if let Err(error) = result {
+        log::warn!("UPDATE_PRUNE: failed to clean old installers: {error}");
+    }
+}
+
+/// 安装包存放路径（AppData/updates/<asset_name>）
+fn installer_path(app_handle: &AppHandle, asset_name: &str) -> Result<PathBuf, String> {
+    Ok(updates_dir(app_handle)?.join(asset_name))
+}
+
+/// 检查是否有桌面端新版本。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopUpdateInfo {
+    /// 最新可用版本号（无 `v` 前缀）
+    pub version: String,
+    /// 当前已安装版本号（无 `v` 前缀）
+    pub current_version: String,
+    pub tag: String,
+    pub published_at: String,
+    pub url: String,
+    pub asset_name: String,
+    pub path: String,
+    pub downloaded: bool,
+}
+
+/// 检查是否有新版本可用（含安装包是否已下载）
+pub async fn check(app_handle: &AppHandle) -> Result<Option<DesktopUpdateInfo>, String> {
+    ensure_self_updatable()?;
+    prune_old_installers(app_handle);
+    match fetch_latest_release(app_handle).await? {
+        None => Ok(None),
+        Some(r) => {
+            let path = installer_path(app_handle, &r.asset_name)?;
+            let downloaded = path.exists();
+            Ok(Some(DesktopUpdateInfo {
+                version: r.version,
+                current_version: current_version(),
+                tag: r.tag,
+                published_at: r.published_at,
+                url: r.url,
+                asset_name: r.asset_name,
+                path: path.to_string_lossy().into_owned(),
+                downloaded,
+            }))
+        }
+    }
+}
+
+/// 下载进度载荷（前端进度条展示）
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDownloadProgress {
+    pub percentage: f64,
+    pub downloaded: u64,
+    pub total: u64,
+    /// 附加提示（如切换下载源），无提示时为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// 从单个下载源流式下载安装包到临时文件；失败时清理半成品（避免残留
+/// 部分字节被误判为「已下载」）。
+async fn download_from_source(
+    client: &reqwest::Client,
+    url: &str,
+    tmp: &std::path::Path,
+    emit: &impl Fn(DesktopDownloadProgress),
+) -> Result<(), String> {
+    log::info!("Downloading desktop installer from {}", url);
+    let res = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("UPDATE_DOWNLOAD: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("UPDATE_DOWNLOAD: {e}"))?;
+
+    let total = res.content_length().unwrap_or(0);
+    let mut file = std::fs::File::create(tmp).map_err(|e| format!("UPDATE_FILE: {e}"))?;
+    use std::io::Write;
+    let mut downloaded: u64 = 0;
+    let mut stream = res.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("UPDATE_DOWNLOAD: {e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("UPDATE_FILE: {e}"))?;
+        downloaded += chunk.len() as u64;
+        let pct = if total > 0 {
+            (downloaded as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        emit(DesktopDownloadProgress {
+            percentage: pct,
+            downloaded,
+            total,
+            message: None,
+        });
+    }
+    drop(file);
+    Ok(())
+}
+
+/// 安装包下载客户端：长超时（安装包可达数百 MB，慢镜像需要更久），
+/// 与检查更新用的 5s `http_client()` 区分。
+fn download_client(app_handle: &AppHandle) -> Result<reqwest::Client, String> {
+    config::proxy::http_client_builder(app_handle)?
+        .user_agent("deepseek-harness-desktop")
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("UPDATE_CLIENT: {e}"))
+}
+
+/// 组装安装包下载源列表：官方 GitHub 直连 + （存在可信摘要时）代理镜像。
+///
+/// 安全策略：第三方镜像没有独立信任根，仅在其内容可被 SHA-256 校验（摘要已取得）
+/// 时才提供兜底；否则只允许官方直连，宁可在官方不可用时失败，也不冒投毒风险。
+fn download_sources(release: &LatestRelease) -> Vec<String> {
+    let mut urls = vec![release.url.clone()];
+    if release.digest.is_some() {
+        urls.extend(config::mirror_download_urls(&release.url));
+    }
+    urls
+}
+
+/// 为下载完成的安装包补充可执行权限（Linux AppImage 必需）。
+///
+/// 下载时 `File::create` 默认生成 `0644`，AppImage 经 `xdg-open` / 直接执行时
+/// 需要可执行位，否则表现为「下载成功但无法打开安装包」（issue #79）。这里
+/// 在安装包落到最终路径后再补充 `0755`，Linux 上天然生效；macOS 一并设置
+/// 无害；Windows 无此概念，忽略。
+#[cfg(unix)]
+fn ensure_installer_executable(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)
+        .map_err(|e| format!("UPDATE_FILE: {e}"))?
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).map_err(|e| format!("UPDATE_FILE: {e}"))?;
+    Ok(())
+}
+
+/// 流式校验安装包文件的 SHA-256。
+///
+/// 安装包可达数百 MB，先 `std::fs::read` 整块读进内存再校验会翻倍占用内存；
+/// 这里按块流式喂给 `Sha256`，完成时仅保留 32 字节摘要。摘要格式接受
+/// `sha256:<64hex>` 或裸 `<64hex>`（统一转小写比较）。
+fn verify_installer_sha256(path: &std::path::Path, expected: &str) -> Result<(), String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let expected = expected
+        .strip_prefix("sha256:")
+        .unwrap_or(expected)
+        .trim()
+        .to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("INTEGRITY_METADATA_INVALID: expected SHA-256 is invalid".to_string());
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| format!("UPDATE_FILE: {e}"))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("UPDATE_FILE: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(format!(
+            "INTEGRITY_CHECK_FAILED: SHA-256 mismatch, expected {expected}, got {actual}"
+        ));
+    }
+    Ok(())
+}
+
+/// 下载桌面端安装包；已下载则直接返回。
+///
+/// 下载期间通过 `desktop-update-progress` 事件推送进度；完成后返回
+/// `DesktopUpdateInfo`（path/downloaded 已更新）。
+///
+/// 下载源策略：先取 `expanded_assets` 页面的 SHA-256 摘要作为完整性凭据，再
+/// 选择下载源——**镜像兜底（GitHub 代理镜像）仅在已取得可信摘要时才可使用**，否则
+/// 宁可失败，防止第三方镜像投毒未被察觉；官方 GitHub 直连在摘要缺失时仍可
+/// 按旧行为下载（兼容早期未填摘要的发布），下载后若有摘要则强制校验。
+pub async fn download(app_handle: &AppHandle) -> Result<DesktopUpdateInfo, String> {
+    // 副作用之前就拒绝：这里之后要么复用已落盘的包，要么开始下载并登记「待安装」。
+    ensure_self_updatable()?;
+    let release = fetch_latest_release(app_handle)
+        .await?
+        .ok_or_else(|| "UPDATE_NONE".to_string())?;
+    let path = installer_path(app_handle, &release.asset_name)?;
+    if !path.exists() {
+        let client = download_client(app_handle)?;
+        download_installer(&client, &release, &path, |progress| {
+            let _ = app_handle.emit("desktop-update-progress", progress);
+        })
+        .await?;
+    }
+    super::pending::set(app_handle, Some((path.as_path(), &release.version)));
+    Ok(DesktopUpdateInfo {
+        version: release.version,
+        current_version: current_version(),
+        tag: release.tag,
+        published_at: release.published_at,
+        url: release.url,
+        asset_name: release.asset_name,
+        path: path.to_string_lossy().into_owned(),
+        downloaded: true,
+    })
+}
+
+async fn download_installer(
+    client: &reqwest::Client,
+    release: &LatestRelease,
+    path: &std::path::Path,
+    emit: impl Fn(DesktopDownloadProgress),
+) -> Result<(), String> {
+    static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _download = DOWNLOAD_LOCK.lock().await;
+    let parent = path
+        .parent()
+        .ok_or("UPDATE_FILE: installer has no parent directory")?;
+    let download_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(parent.join(".installer-download.lock"))
+        .map_err(|e| format!("UPDATE_LOCK: {e}"))?;
+    loop {
+        match download_lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(format!("UPDATE_LOCK: {error}"));
+            }
+        }
+    }
+    match std::fs::read_dir(parent) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        log::warn!("Failed to inspect installer cache entry: {error}");
+                        continue;
+                    }
+                };
+                let name = entry.file_name();
+                if !name
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".installer-") && name.ends_with(".part"))
+                {
+                    continue;
+                }
+                match entry.file_type() {
+                    Ok(kind) if kind.is_file() => {
+                        if let Err(error) = std::fs::remove_file(entry.path()) {
+                            log::warn!(
+                                "Failed to remove stale installer part {}: {error}",
+                                entry.path().display()
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => log::warn!(
+                        "Failed to inspect installer cache entry {}: {error}",
+                        entry.path().display()
+                    ),
+                }
+            }
+        }
+        Err(error) => log::warn!(
+            "Failed to read installer cache {}: {error}",
+            parent.display()
+        ),
+    }
+    if path.exists() {
+        return Ok(());
+    }
+    // 官方直连 → （可选）多个 GitHub 代理镜像兜底。安装包无 SHA-256 元数据，切换源时
+    // 丢弃上一源的部分字节从头下载，避免混用两个源的字节流。
+    // 安全策略：镜像兜底要求已有可信摘要，否则不提供镜像（宁可失败）。
+    let urls = download_sources(release);
+    if urls.len() == 1 {
+        log::warn!(
+            "No SHA-256 digest available for {}, mirror fallback disabled",
+            release.asset_name
+        );
+    }
+    let tmp = tempfile::Builder::new()
+        .prefix(".installer-")
+        .suffix(".part")
+        .tempfile_in(parent)
+        .map_err(|e| format!("UPDATE_FILE: {e}"))?
+        .into_temp_path();
+    let mut last_err = String::new();
+    for (index, url) in urls.iter().enumerate() {
+        if index > 0 {
+            // 走镜像仅在存在可信摘要时发生（见上方 urls 组装）
+            let host = reqwest::Url::parse(url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(|h| h.to_string()))
+                .unwrap_or_else(|| url.clone());
+            log::warn!(
+                "Primary desktop update source failed, switching to fallback: {}",
+                url
+            );
+            emit(DesktopDownloadProgress {
+                percentage: 0.0,
+                downloaded: 0,
+                total: 0,
+                message: Some(format!("主下载源不可用，已切换镜像源重试（{host}）")),
+            });
+        }
+        match download_from_source(client, url, &tmp, &emit).await {
+            Ok(()) => {
+                last_err.clear();
+                break;
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    if !last_err.is_empty() {
+        return Err(format!(
+            "UPDATE_DOWNLOAD: {last_err}（已尝试 {} 个下载源）",
+            urls.len()
+        ));
+    }
+
+    // 完整性校验：摘要存在（镜像路径必有）则强制校验，校验失败即拒绝，
+    // 不保留为可安装文件，也不能被 open_installer 打开。流式校验避免整块读入内存。
+    if let Some(digest) = &release.digest {
+        verify_installer_sha256(&tmp, digest).map_err(|e| format!("UPDATE_DOWNLOAD: {e}"))?;
+        log::info!("Installer SHA-256 verified for {}", release.asset_name);
+    }
+
+    #[cfg(unix)]
+    ensure_installer_executable(&tmp)?;
+    tmp.persist_noclobber(path)
+        .map_err(|e| format!("UPDATE_FILE: {e}"))?;
+
+    Ok(())
+}
+
+/// 校验已规范化的安装包路径确实位于 updates 目录内（防 `..`、符号链接、路径穿越）。
+///
+/// 拆成纯函数便于单测：路径判定是安全边界，必须能在不进文件系统/不起 Tauri 的
+/// 情况下断言（见 tests）。
+fn ensure_within_updates_dir(
+    canonical: &std::path::Path,
+    updates_real: &std::path::Path,
+) -> Result<(), String> {
+    // `Path::starts_with` 只按组件前缀比较、不做归一化：`updates/../evil.exe` 会被
+    // 判为位于 `updates` 下。调用方已 canonicalize（不含 `..`），这里再显式拒绝
+    // `..` 组件，避免将来有人拿未归一的路径调用它而绕过目录边界。
+    let has_parent_dir = canonical
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    if has_parent_dir || !canonical.starts_with(updates_real) {
+        log::error!(
+            "Rejecting installer outside updates dir: {} (root {})",
+            canonical.display(),
+            updates_real.display()
+        );
+        return Err(
+            "UPDATE_PATH_REJECTED: installer path is outside updates directory".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// 校验安装包路径：必须是 `AppData/updates/` 目录内的真实文件，并返回其规范化路径。
+///
+/// 安全边界：任意路径、绝对/相对遍历、`..`、指向目录外的符号链接都会拒绝，
+/// 避免被伪装的 frame 或插件利用去执行任意文件。
+fn resolve_installer_path(app_handle: &AppHandle, path: &str) -> Result<PathBuf, String> {
+    let updates_dir = updates_dir(app_handle)?;
+    let p = std::path::Path::new(path);
+    if !p.exists() || !p.is_file() {
+        return Err(format!("UPDATE_NOT_FOUND: {path}"));
+    }
+    // 规范化后必须仍在 updates 目录内。用 `dunce::canonicalize`（std
+    // `fs::canonicalize`）——它返回的路径不带 Windows `\\?\` verbatim 前缀，
+    // `starts_with` 与日志展示更一致。
+    let canonical = dunce::canonicalize(p).map_err(|e| format!("UPDATE_OPEN: {e}"))?;
+    let updates_real = dunce::canonicalize(&updates_dir).map_err(|e| format!("UPDATE_DIR: {e}"))?;
+    ensure_within_updates_dir(&canonical, &updates_real)?;
+    Ok(canonical)
+}
+
+/// 是否是 AppImage 安装包（Linux 便携格式，自带运行时可执行）。
+#[cfg(target_os = "linux")]
+fn is_appimage(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("AppImage"))
+}
+
+/// 把下载好的新镜像覆盖到用户启动时使用的那个 AppImage 上（issue #1410）。
+///
+/// 只 exec 下载目录里的副本时，桌面条目与命令名仍指向旧镜像，用户下次从原路径启动
+/// 还是旧版本。先复制到原文件同目录的暂存文件再 `rename` 覆盖：旧镜像已映射进当前
+/// 进程，替换目录项不影响运行中的实例，且 `rename` 本身是原子的，中途失败不会留下
+/// 半截镜像。暂存名带进程号并用 `create_new` 独占创建——固定名会被残留文件或符号
+/// 链接接管，把新镜像写到别处、还会在失败清理时删掉别人的文件。原目录不可写
+/// （例如放在 root 拥有的 `/opt`）时明确拒绝，不做「另跑一份」。
+#[cfg(target_os = "linux")]
+fn replace_running_appimage(
+    target: &std::path::Path,
+    downloaded: &std::path::Path,
+) -> Result<(), String> {
+    let staging = target.with_extension(format!("AppImage.{}.new", std::process::id()));
+    // 独占创建：名字已被占用（残留文件或符号链接）就放弃，不覆盖、也不认领别人的文件，
+    // 后面的清理因此只会删掉本次真正创建的那个。
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)
+        .map_err(|error| {
+            format!(
+                "UPDATE_MEDIA_UNSUPPORTED: cannot create {}: {error}",
+                staging.display()
+            )
+        })?;
+    let result = std::fs::copy(downloaded, &staging)
+        .map_err(|error| error.to_string())
+        .and_then(|_| ensure_installer_executable(&staging))
+        .and_then(|()| std::fs::rename(&staging, target).map_err(|error| error.to_string()));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!(
+            "UPDATE_MEDIA_UNSUPPORTED: cannot replace {}: {error}",
+            target.display()
+        ));
+    }
+    log::info!(
+        "Replaced running AppImage {} with {}",
+        target.display(),
+        downloaded.display()
+    );
+    Ok(())
+}
+
+/// 安装包对应的 MIME 类型（用于解析桌面默认处理器），只认 /deb/rpm。
+#[cfg(target_os = "linux")]
+fn installer_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "deb" => Some("application/vnd.debian.binary-package"),
+        "rpm" => Some("application/x-rpm"),
+        _ => None,
+    }
+}
+
+/// 桌面条目的下探层数上限（id 是相对 `applications/` 的路径，理论上可嵌套任意层，
+/// 实际发行版最多到 `vendor/` 一级，留 4 层足够且不会无界遍历）。
+#[cfg(target_os = "linux")]
+const MAX_DESKTOP_ENTRY_DEPTH: usize = 4;
+
+/// 桌面条目搜索目录：`$XDG_DATA_HOME/applications` + `$XDG_DATA_DIRS/applications`。
+///
+/// 纯函数（环境值由调用方传入），空串按 XDG 规范等同未设置：`XDG_DATA_HOME` 空
+/// 则退回 `$HOME/.local/share`，`XDG_DATA_DIRS` 空则退回
+/// `/usr/local/share:/usr/share`，否则会把系统 applications 目录整个漏掉。
+#[cfg(target_os = "linux")]
+fn applications_dirs_from(
+    data_home: Option<&std::ffi::OsStr>,
+    data_dirs: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    match data_home.filter(|value| !value.is_empty()) {
+        Some(dir) => roots.push(PathBuf::from(dir)),
+        None => {
+            if let Some(home) = home.filter(|value| !value.is_empty()) {
+                roots.push(PathBuf::from(home).join(".local/share"));
+            }
+        }
+    }
+    let data_dirs = data_dirs
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    roots.extend(
+        data_dirs
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
+    roots
+        .into_iter()
+        .map(|dir| dir.join("applications"))
+        .collect()
+}
+
+/// 当前进程环境下的桌面条目搜索目录。
+#[cfg(target_os = "linux")]
+fn applications_dirs() -> Vec<PathBuf> {
+    applications_dirs_from(
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("XDG_DATA_DIRS").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+/// 按目录顺序查找桌面条目。
+///
+/// 桌面条目的 id 是相对 `applications/` 的路径把 `/` 换成 `-`（`foo/bar.desktop`
+/// 的 id 是 `foo-bar.desktop`），所以要逐层下探并按推导出的 id 比对；同一 id 命中
+/// 多个时先命中的层更浅，正合「浅路径优先」的规范约定。
+#[cfg(target_os = "linux")]
+fn find_desktop_entry(id: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if id.contains('/') || id.contains("..") {
+        return None;
+    }
+    dirs.iter().find_map(|dir| find_entry_in_dir(id, dir))
+}
+
+/// 在单个 applications 目录内按层序（浅层优先）查找指定 id 的条目。
+#[cfg(target_os = "linux")]
+fn find_entry_in_dir(id: &str, dir: &std::path::Path) -> Option<PathBuf> {
+    let mut level = vec![(dir.to_path_buf(), String::new())];
+    for _ in 0..MAX_DESKTOP_ENTRY_DEPTH {
+        let mut next = Vec::new();
+        for (current, prefix) in level {
+            let Ok(entries) = std::fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                if path.is_dir() {
+                    next.push((path, format!("{prefix}{name}-")));
+                } else if format!("{prefix}{name}") == id {
+                    return Some(path);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    None
+}
+
+/// 当前 MIME 类型的默认处理器 id（`xdg-mime query default`）。
+#[cfg(target_os = "linux")]
+fn default_handler_id(mime: &str) -> Option<String> {
+    let output = std::process::Command::new("xdg-mime")
+        .args(["query", "default", mime])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// 按空白切分 `Exec`，双引号成组、反斜杠转义。
+///
+/// 切分结果直接作为 argv 交给系统调用，不经 shell 二次解释，因此引号与转义
+/// 只需还原为字面量。
+#[cfg(target_os = "linux")]
+fn split_exec(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// 解析 `.desktop` 的 `[Desktop Entry]` 段：返回 `Exec` 参数与是否需要终端。
+///
+/// 只认主段，`[Desktop Action …]` 等其它段里的 `Exec` 不参与（动作不是文件处理器）。
+#[cfg(target_os = "linux")]
+fn parse_desktop_entry(text: &str) -> Option<(Vec<String>, bool)> {
+    let mut group = String::new();
+    let mut exec = None;
+    let mut terminal = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            group = line[1..line.len() - 1].to_string();
+            continue;
+        }
+        if group != "Desktop Entry" {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Exec=") {
+            exec = Some(split_exec(value));
+        } else if let Some(value) = line.strip_prefix("Terminal=") {
+            terminal = value.trim().eq_ignore_ascii_case("true");
+        }
+    }
+    Some((exec?, terminal))
+}
+
+/// 展开 `Exec` 字段码：首个 `%f/%F/%u/%U` 换成安装包路径，其余字段码丢弃；
+/// 完全不含文件码时按处理器惯例追加路径。
+#[cfg(target_os = "linux")]
+fn exec_with_file(tokens: &[String], file: &str) -> Vec<String> {
+    let mut used = false;
+    let mut command = Vec::with_capacity(tokens.len() + 1);
+    for token in tokens {
+        let mut expanded = String::new();
+        let mut chars = token.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '%' {
+                expanded.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('%') => expanded.push('%'),
+                Some(code) if "fFuU".contains(code) => {
+                    if !used {
+                        expanded.push_str(file);
+                        used = true;
+                    }
+                }
+                Some(_) => {}
+                None => expanded.push('%'),
+            }
+        }
+        if !expanded.is_empty() {
+            command.push(expanded);
+        }
+    }
+    if !used {
+        command.push(file.to_string());
+    }
+    command
+}
+
+/// 处理器程序是否真实存在且可执行（含 `/` 的按路径判断，裸名按 `PATH` 查找）。
+///
+/// 桌面条目可能指向已被卸载的程序（处理器卸了、条目还在），此时 `sh` 会以 127
+/// 退出，而 spawn 本身是成功的——不先验一遍就会吞掉失败、让上层错过兜底。
+#[cfg(target_os = "linux")]
+fn resolves_to_executable(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    };
+    if program.contains('/') {
+        return executable(std::path::Path::new(program));
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| executable(&dir.join(program)))
+    })
+}
+
+/// 由一个等待子进程的 shell 启动处理器：`/bin/sh -c '"$@"' sh <命令…>`。
+///
+/// 返回的句柄可丢弃：子进程独立存活，丢弃只表示本进程不再回收它。
+#[cfg(target_os = "linux")]
+fn spawn_waited_handler(command: &[String]) -> Result<std::process::Child, String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| "UPDATE_OPEN: empty handler command".to_string())?;
+    if !resolves_to_executable(program) {
+        return Err(format!("UPDATE_OPEN: handler program not found: {program}"));
+    }
+    let mut child = std::process::Command::new("/bin/sh");
+    child
+        .arg("-c")
+        .arg(r#""$@""#)
+        .arg("sh")
+        .arg(program)
+        .args(args)
+        .stdin(std::process::Stdio::null());
+    child.spawn().map_err(|e| format!("UPDATE_OPEN: {e}"))
+}
+
+/// 用系统默认处理器打开安装包，并保证处理器始终有活着的父进程。
+///
+/// `xdg-open`（opener 插件底层 `open::that_detached` 的 double-fork + `setsid`）
+/// 启动处理器后立即退出，处理器被 init 收养（`PPID=1`）；而处理器（GDebi 等）的
+/// 安装按钮会 `exec` `pkexec`，pkexec 在 `getppid()==1` 时拒绝运行，表现为
+/// 「点了安装、窗口直接消失、什么都没装上」（issue #865）。这里自行解析默认
+/// 处理器的 `Exec` 并交由一个等待子进程的 shell 启动：「对话框立即更新」路径下
+/// 该 shell 是本进程的子进程，「退出时自动打开」路径下它被 init 收养但仍在等待，
+/// 两条路径下处理器的父进程都活着，提权因此可用。
+#[cfg(target_os = "linux")]
+fn open_with_system_handler(file: &std::path::Path) -> Result<(), String> {
+    let mime = installer_mime(file)
+        .ok_or_else(|| "UPDATE_OPEN: unsupported installer type".to_string())?;
+    let id =
+        default_handler_id(mime).ok_or_else(|| "UPDATE_OPEN: no default handler".to_string())?;
+    let entry = find_desktop_entry(&id, &applications_dirs())
+        .ok_or_else(|| format!("UPDATE_OPEN: desktop entry not found: {id}"))?;
+    let text = std::fs::read_to_string(&entry).map_err(|e| format!("UPDATE_OPEN: {e}"))?;
+    let (exec, terminal) = parse_desktop_entry(&text)
+        .ok_or_else(|| format!("UPDATE_OPEN: no Exec in {}", entry.display()))?;
+    if terminal {
+        return Err(format!("UPDATE_OPEN: handler needs a terminal: {id}"));
+    }
+    let command = exec_with_file(&exec, &file.to_string_lossy());
+    spawn_waited_handler(&command).map(|_| ())
+}
+
+/// 校验安装包并交给系统默认处理器打开（不停服务、不动「待安装」标记）。
+///
+/// **调用方必须先停 Harness**（见 [`stop_for_installer`](crate::service::workflow::stop_for_installer)）：
+/// 安装器会强杀桌面端进程，桌面端先消失就没人回收 Harness 子进程，它变成孤儿继续
+/// 占用配置端口，更新后的新实例会撞上 EADDRINUSE。两条调用路径各自完成停服：
+/// 「对话框立即更新」用 async 的 `workflow::stop`（要更新状态），「退出时自动更新」
+/// 用同步的 `stop_for_installer`（退出路径没有 async 运行时可用）。停止动作不放在
+/// 这里，是为了让每条路径都能按自己的时序等待端口释放。
+pub(super) fn open_installer_now(app_handle: &AppHandle, path: &str) -> Result<(), String> {
+    ensure_self_updatable()?;
+    let resolved = resolve_installer_path(app_handle, path)?;
+    log::info!("Opening desktop installer: {}", resolved.display());
+    // 兜底补充可执行权限：兼容老版本下载的 AppImage（0644）被打包用户留存，
+    // 直接打开仍会失败；此处幂等修复后再交给系统处理器。
+    #[cfg(unix)]
+    ensure_installer_executable(&resolved)?;
+
+    // Linux：AppImage 自带运行时，直接执行；xdg-open 依赖桌面注册的 MIME
+    // 处理器，COSMIC 等未注册的环境会静默失败（open::that_detached 只检查
+    // 进程是否 spawn 成功，看不到 xdg-open 的退出码）。
+    #[cfg(target_os = "linux")]
+    if is_appimage(&resolved) {
+        // 便携镜像的更新目标是「用户启动时用的那个文件」，不是下载目录里的副本：
+        // 只 exec 副本，桌面条目与命令名仍指向旧镜像（issue #1410）。替换成功后就
+        // 从原路径重启，新实例的 `APPIMAGE` 也回到原路径，不留第二条升级链。
+        // 当前不是镜像启动的（系统包安装却拿到 AppImage 兜底），替换目标不存在，
+        // 一律拒绝，不做「另跑一份」的假升级。
+        let Some(running) = running_appimage() else {
+            return Err(
+                "UPDATE_MEDIA_UNSUPPORTED: portable image cannot replace this install".to_string(),
+            );
+        };
+        replace_running_appimage(&running, &resolved)?;
+        std::process::Command::new(&running)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("UPDATE_OPEN: {e}"))?;
+        return Ok(());
+    }
+
+    // .deb/.rpm 仍交给系统默认处理器（软件中心 / 包管理器），但由本进程启动，
+    // 让处理器有活着的父进程，否则其提权按钮会被 pkexec 的孤儿检查拒绝
+    // （issue #865）。处理器解析失败时退回 opener 的分离式交接：至少能打开。
+    #[cfg(target_os = "linux")]
+    match open_with_system_handler(&resolved) {
+        Ok(()) => return Ok(()),
+        Err(error) => log::warn!("UPDATE_OPEN: system handler launch failed: {error}"),
+    }
+
+    app_handle
+        .opener()
+        .open_path(resolved.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("UPDATE_OPEN: {e}"))
+}
+
+/// 打开安装包：交给系统默认处理器（Windows 会触发 UAC 执行安装器）。
+pub async fn open_installer(app_handle: &AppHandle, path: String) -> Result<(), String> {
+    if !super::version::supports_stable_updates(&app_handle.config().identifier) {
+        return Err(
+            "UPDATE_CHANNEL_UNSUPPORTED: nightly builds do not install stable updates".into(),
+        );
+    }
+    let _transition = workflow::acquire_core_transition().await?;
+    for profile in workflow::instances::profiles() {
+        workflow::instances::scope(profile, async {
+            if workflow::has_owned_process() {
+                workflow::stop(app_handle.clone()).await?;
+            }
+            Ok::<(), String>(())
+        })
+        .await?;
+    }
+    open_installer_now(app_handle, &path)?;
+    // 安装包已交给系统 → 清除「待安装」标记，避免退出应用时重复拉起安装器。
+    super::pending::set(app_handle, None);
+
+    // Linux AppImage 安装包就是新版本本体，且与当前实例共用单实例 D-Bus 锁：
+    // 当前实例不退出时，新进程会转发激活后立即退出（表现为「打开安装包」无效）。
+    // 释放单实例名并退出，让已拉起的新版本接管；.deb/.rpm 由包管理器处理，
+    // 无需结束当前实例。
+    #[cfg(target_os = "linux")]
+    if is_appimage(std::path::Path::new(&path)) {
+        release_appimage_instance(app_handle).await?;
+        app_handle.exit(0);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn release_appimage_instance<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+) -> Result<(), String> {
+    let app_handle = app_handle.clone();
+    // issue #1347：Linux 单实例锁的 D-Bus 释放会阻塞，不能嵌套在 async 命令的 Tokio 运行时中。
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri_plugin_single_instance::destroy(&app_handle);
+    })
+    .await
+    .map_err(|error| format!("UPDATE_OPEN: failed to release single-instance lock: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn local_release(url: String) -> LatestRelease {
+        LatestRelease {
+            version: "99.0.0".into(),
+            tag: "v99.0.0".into(),
+            published_at: "2026-11-05T00:00:00Z".into(),
+            url,
+            asset_name: "installer.AppImage".into(),
+            digest: None,
+        }
+    }
+
+    fn download_cache_files(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .filter(|entry| entry.file_name() != ".installer-download.lock")
+            .map(|entry| entry.path())
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[tokio::test]
+    async fn download_removes_stale_parts_without_touching_other_entries() {
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let stale = dir.path().join(".installer-stale.part");
+            std::fs::write(&stale, b"orphan").unwrap();
+            for name in ["other.part", ".installer-notes.txt", "notes.txt"] {
+                std::fs::write(dir.path().join(name), b"keep").unwrap();
+            }
+            let directory = dir.path().join(".installer-directory.part");
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("nested"), b"keep").unwrap();
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink("notes.txt", dir.path().join(".installer-link.part"))
+                    .unwrap();
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let release = local_release(format!(
+                "http://{}/installer",
+                listener.local_addr().unwrap()
+            ));
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                    )
+                    .await
+                    .unwrap();
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+            download_installer(&client, &release, &path, |_| {})
+                .await
+                .unwrap();
+            server.await.unwrap();
+
+            assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+            assert!(!stale.exists());
+            for name in [
+                "other.part",
+                ".installer-notes.txt",
+                "notes.txt",
+                ".installer-directory.part/nested",
+            ] {
+                assert_eq!(
+                    std::fs::read(dir.path().join(name)).unwrap(),
+                    b"keep",
+                    "{name}"
+                );
+            }
+            #[cfg(unix)]
+            assert_eq!(
+                std::fs::read_link(dir.path().join(".installer-link.part")).unwrap(),
+                std::path::Path::new("notes.txt")
+            );
+        })
+        .await
+        .expect("stale installer cleanup regression timed out");
+    }
+
+    #[tokio::test]
+    async fn download_waits_for_another_process_and_recovers_its_crash_leftover() {
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        const CHILD: &str = "DSH_TEST_INSTALLER_DOWNLOAD_CHILD";
+        const URL: &str = "DSH_TEST_INSTALLER_DOWNLOAD_URL";
+        const READY: &str = "INSTALLER_DOWNLOAD_PARTIAL_READY";
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let path = PathBuf::from(directory).join("child.AppImage");
+            let release = local_release(std::env::var(URL).unwrap());
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .unwrap();
+            download_installer(&client, &release, &path, |_| {
+                use std::io::Write;
+                println!("{READY}");
+                std::io::stdout().flush().unwrap();
+            })
+            .await
+            .unwrap();
+            return;
+        }
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/installer", listener.local_addr().unwrap());
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "service::update::install::tests::download_waits_for_another_process_and_recovers_its_crash_leftover", "--nocapture", "--test-threads=1"])
+                .env(CHILD, dir.path())
+                .env(URL, &url)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::inherit())
+                .kill_on_drop(true);
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
+            let mut child = command.spawn().unwrap();
+            let (mut first_socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            first_socket.read(&mut request).await.unwrap();
+            first_socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabc").await.unwrap();
+            let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+            loop {
+                let line = output.next_line().await.unwrap().expect("child exited before writing partial installer");
+                if line.contains(READY) {
+                    break;
+                }
+            }
+            let probe = std::fs::OpenOptions::new().read(true).write(true)
+                .open(dir.path().join(".installer-download.lock")).unwrap();
+            assert!(matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+            drop(probe);
+            let partials = download_cache_files(dir.path());
+            assert_eq!(partials.len(), 1);
+            let partial = &partials[0];
+            assert_eq!(std::fs::read(partial).unwrap(), b"abc");
+
+            let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+            let release = local_release(url);
+            let (polled, ready) = tokio::sync::oneshot::channel();
+            let next = tokio::spawn({
+                let path = path.clone();
+                async move {
+                    use std::future::Future;
+                    let future = download_installer(&client, &release, &path, |_| {});
+                    tokio::pin!(future);
+                    let mut polled = Some(polled);
+                    std::future::poll_fn(|cx| {
+                        let result = future.as_mut().poll(cx);
+                        if let Some(polled) = polled.take() {
+                            let _ = polled.send(());
+                        }
+                        result
+                    }).await
+                }
+            });
+            ready.await.unwrap();
+            assert!(tokio::time::timeout(Duration::from_millis(200), listener.accept()).await.is_err());
+            assert_eq!(std::fs::read(partial).unwrap(), b"abc");
+            child.kill().await.unwrap();
+            assert!(!child.wait().await.unwrap().success());
+            drop(first_socket);
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nxyz").await.unwrap();
+            next.await.unwrap().unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"xyz");
+            assert!(!partial.exists());
+            assert!(!dir.path().join("child.AppImage").exists());
+            assert_eq!(download_cache_files(dir.path()), vec![path]);
+        }).await.expect("cross-process installer regression timed out");
+    }
+
+    #[tokio::test]
+    async fn cancelled_lock_waiter_leaves_cache_untouched() {
+        use std::future::Future;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let stale = dir.path().join(".installer-stale.part");
+            std::fs::write(&stale, b"orphan").unwrap();
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.path().join(".installer-download.lock"))
+                .unwrap();
+            lock.try_lock().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let release = local_release(format!(
+                "http://{}/installer",
+                listener.local_addr().unwrap()
+            ));
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let mut waiting = Box::pin(download_installer(&client, &release, &path, |_| {}));
+            std::future::poll_fn(|cx| {
+                assert!(waiting.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert_eq!(download_cache_files(dir.path()), vec![stale.clone()]);
+            drop(waiting);
+            drop(lock);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(&stale).unwrap(), b"orphan");
+            assert_eq!(download_cache_files(dir.path()), vec![stale.clone()]);
+
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                    )
+                    .await
+                    .unwrap();
+            });
+            download_installer(&client, &release, &path, |_| {})
+                .await
+                .unwrap();
+            server.await.unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+            assert_eq!(download_cache_files(dir.path()), vec![path]);
+        })
+        .await
+        .expect("cancelled installer lock wait regression timed out");
+    }
+
+    #[tokio::test]
+    async fn concurrent_downloads_publish_one_complete_installer() {
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let release = local_release(format!(
+                "http://{}/installer",
+                listener.local_addr().unwrap()
+            ));
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let started = std::sync::Arc::new(tokio::sync::Notify::new());
+            let first = tokio::spawn({
+                let (client, release, path, started) = (
+                    client.clone(),
+                    release.clone(),
+                    path.clone(),
+                    started.clone(),
+                );
+                async move {
+                    download_installer(&client, &release, &path, |_| started.notify_one()).await
+                }
+            });
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabc")
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            let (polled, second_polled) = tokio::sync::oneshot::channel();
+            let second = tokio::spawn({
+                let path = path.clone();
+                async move {
+                    use std::future::Future;
+                    let future = download_installer(&client, &release, &path, |_| {});
+                    tokio::pin!(future);
+                    let mut polled = Some(polled);
+                    std::future::poll_fn(|cx| {
+                        let result = future.as_mut().poll(cx);
+                        if let Some(polled) = polled.take() {
+                            let _ = polled.send(());
+                        }
+                        result
+                    })
+                    .await
+                }
+            });
+            second_polled.await.unwrap();
+            let duplicate =
+                tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+            if duplicate.is_ok() {
+                first.abort();
+                second.abort();
+            }
+            assert!(
+                duplicate.is_err(),
+                "a second caller must reuse the in-flight installer download"
+            );
+            socket.write_all(b"def").await.unwrap();
+            first.await.unwrap().unwrap();
+            second.await.unwrap().unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+            assert_eq!(download_cache_files(dir.path()), vec![path]);
+        })
+        .await
+        .expect("installer regression timed out");
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_removes_partial_file() {
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let release = local_release(format!(
+                "http://{}/installer",
+                listener.local_addr().unwrap()
+            ));
+            let started = std::sync::Arc::new(tokio::sync::Notify::new());
+            let task = tokio::spawn({
+                let (path, started) = (path.clone(), started.clone());
+                async move {
+                    let client = reqwest::Client::builder()
+                        .no_proxy()
+                        .timeout(Duration::from_secs(5))
+                        .build()
+                        .unwrap();
+                    download_installer(&client, &release, &path, |_| started.notify_one()).await
+                }
+            });
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabc")
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(!path.exists());
+            assert!(download_cache_files(dir.path()).is_empty());
+            std::fs::write(&path, b"complete").unwrap();
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let release = local_release("http://127.0.0.1:1/unneeded".into());
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                download_installer(&client, &release, &path, |_| {}),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"complete");
+        })
+        .await
+        .expect("installer regression timed out");
+    }
+
+    #[tokio::test]
+    async fn failed_integrity_check_never_publishes_an_installer() {
+        let _download = TEST_DOWNLOAD_LOCK.lock().await;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("installer.AppImage");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut release = local_release(format!(
+                "http://{}/installer",
+                listener.local_addr().unwrap()
+            ));
+            release.digest = Some("0".repeat(64));
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                    )
+                    .await
+                    .unwrap();
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let result = download_installer(&client, &release, &path, |_| {}).await;
+            server.await.unwrap();
+            assert!(result.unwrap_err().contains("INTEGRITY_CHECK_FAILED:"));
+            assert!(!path.exists());
+            assert!(download_cache_files(dir.path()).is_empty());
+        })
+        .await
+        .expect("installer regression timed out");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_instance_release_from_async_command_allows_a_new_instance() {
+        use std::os::unix::process::CommandExt;
+
+        const CHILD: &str = "DSH_TEST_APPIMAGE_INSTANCE_RELEASE";
+        const VERIFIED: &str = "APPIMAGE_INSTANCE_RELEASE_VERIFIED";
+        if std::env::var(CHILD).as_deref() == Ok("1") {
+            use tauri::test::{mock_builder, mock_context, noop_assets};
+
+            fn has_owner(identifier: &str) -> bool {
+                let output = std::process::Command::new("dbus-send")
+                    .args([
+                        "--session",
+                        "--print-reply",
+                        "--dest=org.freedesktop.DBus",
+                        "/org/freedesktop/DBus",
+                        "org.freedesktop.DBus.NameHasOwner",
+                    ])
+                    .arg(format!("string:{identifier}.SingleInstance"))
+                    .output()
+                    .expect("Linux single-instance regression requires dbus-send");
+                assert!(output.status.success(), "{output:?}");
+                let reply = String::from_utf8(output.stdout).unwrap();
+                match reply
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| line.starts_with("boolean "))
+                {
+                    Some("boolean true") => true,
+                    Some("boolean false") => false,
+                    _ => panic!("D-Bus returned an invalid ownership reply: {reply}"),
+                }
+            }
+
+            let identifier = format!("org.dsh.UpdateHandoff.p{}", std::process::id());
+            let mut context = mock_context(noop_assets());
+            context.config_mut().identifier = identifier.clone();
+            let app = mock_builder()
+                .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
+                .build(context)
+                .unwrap();
+            assert!(
+                has_owner(&identifier),
+                "the original instance must own the D-Bus name"
+            );
+            tauri::async_runtime::block_on(release_appimage_instance(app.handle())).unwrap();
+            assert!(
+                !has_owner(&identifier),
+                "the async release must free the D-Bus name"
+            );
+            let mut context = mock_context(noop_assets());
+            context.config_mut().identifier = identifier.clone();
+            let replacement = mock_builder()
+                .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
+                .build(context)
+                .unwrap();
+            assert!(
+                has_owner(&identifier),
+                "the replacement must own the D-Bus name"
+            );
+            tauri_plugin_single_instance::destroy(&replacement);
+            println!("{VERIFIED}");
+            return;
+        }
+
+        let mut child = std::process::Command::new("dbus-run-session")
+            .args(["--"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "service::update::install::tests::appimage_instance_release_from_async_command_allows_a_new_instance",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .process_group(0)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("Linux single-instance regression requires dbus-run-session");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while child.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() >= deadline {
+                unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+                let _ = child.wait();
+                panic!("AppImage single-instance release did not return within 30 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "single-instance release failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(VERIFIED),
+            "the replacement must acquire the D-Bus name instead of forwarding and exiting"
+        );
+    }
+
+    #[test]
+    fn immediate_installer_stops_every_profile_before_handoff_and_propagates_failure() {
+        let source = include_str!("install.rs");
+        let opening = source
+            .split("pub async fn open_installer(")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let transition = opening
+            .find("workflow::acquire_core_transition().await?")
+            .unwrap();
+        let profiles = opening
+            .find("for profile in workflow::instances::profiles()")
+            .unwrap();
+        let scope = opening
+            .find("workflow::instances::scope(profile, async {")
+            .unwrap();
+        let stop = opening
+            .find("workflow::stop(app_handle.clone()).await?")
+            .unwrap();
+        let handoff = opening
+            .find("open_installer_now(app_handle, &path)?")
+            .unwrap();
+        assert!(transition < profiles && profiles < scope && scope < stop && stop < handoff);
+        assert!(opening[stop..handoff].contains(".await?;"));
+    }
+
+    #[test]
+    fn prune_installers_keeps_up_to_five() {
+        let dir = tempfile::tempdir().unwrap();
+        prune_installers_in_dir(dir.path(), &[]).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("installer-{i}.exe")), b"payload").unwrap();
+            prune_installers_in_dir(dir.path(), &[]).unwrap();
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), i + 1);
+        }
+    }
+
+    #[test]
+    fn prune_installers_keeps_five_by_modified_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = [
+            "z.exe",
+            "a.MSI",
+            "y.dmg",
+            "b.AppImage",
+            "x.deb",
+            "c.rpm",
+            "w.exe",
+            "d.exe",
+        ];
+        for (i, name) in names.iter().enumerate() {
+            let file = std::fs::File::create(dir.path().join(name)).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + i as u64),
+            ))
+            .unwrap();
+        }
+        for name in ["download.part", "notes.txt"] {
+            std::fs::write(dir.path().join(name), b"keep").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("nested.exe")).unwrap();
+        std::fs::write(dir.path().join("nested.exe/installer.exe"), b"keep").unwrap();
+
+        prune_installers_in_dir(dir.path(), &[]).unwrap();
+        for (i, name) in names.iter().enumerate() {
+            assert_eq!(dir.path().join(name).exists(), i >= 3, "{name}");
+        }
+        for name in ["download.part", "notes.txt", "nested.exe/installer.exe"] {
+            assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"keep");
+        }
+    }
+
+    #[test]
+    fn prune_installers_preserves_pending_and_running_packages_within_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..8 {
+            let file =
+                std::fs::File::create(dir.path().join(format!("installer-{i}.exe"))).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + i)),
+            )
+            .unwrap();
+        }
+        let protected = [
+            dir.path().join("installer-0.exe"),
+            dir.path().join("installer-1.exe"),
+        ];
+        prune_installers_in_dir(dir.path(), &protected).unwrap();
+        for i in 0..8 {
+            assert_eq!(
+                dir.path().join(format!("installer-{i}.exe")).exists(),
+                i < 2 || i >= 5,
+                "{i}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_installers_ignores_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("outside.exe");
+        std::fs::write(&sentinel, b"keep").unwrap();
+        let link = dir.path().join("linked.exe");
+        std::os::unix::fs::symlink(&sentinel, &link).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.path().join(format!("installer-{i}.exe")), b"payload").unwrap();
+        }
+        prune_installers_in_dir(dir.path(), &[]).unwrap();
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 6);
+    }
+
+    /// 下载后补充可执行位：下载默认 0644 的文件被修复为含可执行位（issue #79）。
+    #[cfg(unix)]
+    #[test]
+    fn ensure_installer_executable_sets_exec_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dsh-update-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("installer.AppImage");
+        std::fs::write(&file, b"payload").unwrap();
+        // 模拟下载默认权限 0644
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        ensure_installer_executable(&file).unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "应包含所有者/组/其他可执行位，mode={mode:o}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 便携镜像的就地替换：新镜像覆盖用户在用的那个文件，且不留暂存文件。
+    ///
+    /// 旧行为只 exec 下载目录里的副本，桌面条目仍指向旧镜像（issue #1410）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn replace_running_appimage_overwrites_the_original_image() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let running = dir.path().join("DSH.AppImage");
+        let downloaded = dir.path().join("updates/DSH_0.30.5.AppImage");
+        std::fs::create_dir_all(downloaded.parent().unwrap()).unwrap();
+        std::fs::write(&running, b"old-image").unwrap();
+        std::fs::write(&downloaded, b"new-image").unwrap();
+
+        replace_running_appimage(&running, &downloaded).unwrap();
+        assert_eq!(std::fs::read(&running).unwrap(), b"new-image");
+        let mode = std::fs::metadata(&running).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "替换后的镜像必须可执行，mode={mode:o}");
+        assert_eq!(std::fs::read(&downloaded).unwrap(), b"new-image");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "暂存文件必须已被 rename 掉"
+        );
+
+        // 原目录不可写（镜像放在 root 拥有的目录）时明确拒绝，不静默「另跑一份」
+        let read_only = dir.path().join("readonly");
+        std::fs::create_dir_all(&read_only).unwrap();
+        let target = read_only.join("DSH.AppImage");
+        std::fs::write(&target, b"old-image").unwrap();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = replace_running_appimage(&target, &downloaded);
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // root 无视目录权限位，该断言只在普通用户下有意义
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(result.is_err(), "只读目录必须拒绝替换");
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), b"old-image");
+    }
+
+    /// 暂存文件独占创建：同名残留文件不会被覆盖，失败清理也不会删掉别人的文件。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn replace_running_appimage_never_reuses_a_stale_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = dir.path().join("DSH.AppImage");
+        let downloaded = dir.path().join("DSH_0.30.5.AppImage");
+        std::fs::write(&running, b"old-image").unwrap();
+        std::fs::write(&downloaded, b"new-image").unwrap();
+        let stale = dir
+            .path()
+            .join(format!("DSH.AppImage.{}.new", std::process::id()));
+        std::fs::write(&stale, b"someone-else").unwrap();
+
+        assert!(replace_running_appimage(&running, &downloaded).is_err());
+        assert_eq!(std::fs::read(&running).unwrap(), b"old-image");
+        assert_eq!(std::fs::read(&stale).unwrap(), b"someone-else");
+    }
+
+    /// AppImage 识别按扩展名匹配且大小写不敏感；其它安装包格式不受影响。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_detection_is_extension_based() {
+        use std::path::Path;
+        assert!(is_appimage(Path::new(
+            "/tmp/Deepseek.Harness.Desktop_0.13.0_amd64.AppImage"
+        )));
+        assert!(is_appimage(Path::new("/tmp/tool.appimage")));
+        assert!(!is_appimage(Path::new(
+            "/tmp/Deepseek.Harness.Desktop_0.13.0_amd64.deb"
+        )));
+        assert!(!is_appimage(Path::new(
+            "/tmp/Deepseek.Harness.Desktop_0.13.0_x86_64.rpm"
+        )));
+        assert!(!is_appimage(Path::new("/tmp/AppImage")));
+    }
+
+    /// 镜像兜底策略回归：无摘要时只有官方源；有摘要时才加入镜像。
+    #[test]
+    fn download_sources_only_mirrors_with_digest() {
+        let url = "https://github.com/x/y/releases/download/v0.7.4/x.dmg";
+        let base = LatestRelease {
+            version: "0.7.4".into(),
+            tag: "v0.7.4".into(),
+            published_at: String::new(),
+            url: url.into(),
+            asset_name: "x.dmg".into(),
+            digest: None,
+        };
+        // 无摘要 → 仅官方直连
+        let without = download_sources(&base);
+        assert_eq!(without.len(), 1);
+        assert_eq!(without[0], url);
+        // 有摘要 → 官方 + 镜像
+        let with_digest = LatestRelease {
+            digest: Some(format!("sha256:{}", "b".repeat(64))),
+            ..base.clone()
+        };
+        let sources = download_sources(&with_digest);
+        assert_eq!(sources.len(), 1 + crate::config::DSH_MIRROR_PREFIXES.len());
+        for (source, prefix) in sources[1..].iter().zip(crate::config::DSH_MIRROR_PREFIXES) {
+            assert!(
+                source.starts_with(prefix),
+                "镜像应为 {prefix} 前缀: {source}"
+            );
+            assert!(
+                source.ends_with("/releases/download/v0.7.4/x.dmg"),
+                "镜像保留完整资产路径: {source}"
+            );
+        }
+    }
+
+    /// 流式校验：正确的文件通过、错误的摘要拒绝，且不把整个文件读进内存。
+    #[test]
+    fn verify_installer_sha256_streams_and_rejects_mismatch() {
+        use sha2::Digest;
+        let dir = std::env::temp_dir().join(format!("dsh-update-hash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("installer.part");
+        let content = b"deepseek-harness-desktop installer payload";
+        std::fs::write(&file, content).unwrap();
+        let real = format!("sha256:{:x}", sha2::Sha256::digest(content));
+        // 正确摘要通过
+        assert!(verify_installer_sha256(&file, &real).is_ok());
+        // 裸 64hex（无 sha256: 前缀）也接受
+        assert!(verify_installer_sha256(&file, real.trim_start_matches("sha256:")).is_ok());
+        // 错误摘要拒绝
+        let wrong = format!("sha256:{}", "0".repeat(64));
+        assert!(verify_installer_sha256(&file, &wrong).is_err());
+        // 非法摘要格式拒绝
+        assert!(verify_installer_sha256(&file, "sha256:zz").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 安装包路径必须是 updates 目录内的文件：同前缀的兄弟目录、目录穿越都拒绝。
+    /// 退出时自动打开安装器（pending）与对话框「打开安装包」共用这条判定。
+    #[test]
+    fn ensure_within_updates_dir_rejects_outside_paths() {
+        let root = std::path::Path::new("root").join("updates");
+        // 目录内 → 通过
+        assert!(ensure_within_updates_dir(&root.join("app-setup.exe"), &root).is_ok());
+        // 目录外的兄弟路径（前缀相同也不能放过：`updates-evil` 不是 `updates` 的子路径）
+        assert!(ensure_within_updates_dir(&root.join("..").join("evil.exe"), &root).is_err());
+        let sibling = std::path::Path::new("root")
+            .join("updates-evil")
+            .join("x.exe");
+        assert!(ensure_within_updates_dir(&sibling, &root).is_err());
+    }
+
+    /// 安装包 MIME 只认 deb/rpm 且大小写不敏感，其它格式不参与处理器解析。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installer_mime_maps_deb_and_rpm_only() {
+        use std::path::Path;
+        assert_eq!(
+            installer_mime(Path::new("/tmp/App_0.21.0_amd64.deb")),
+            Some("application/vnd.debian.binary-package")
+        );
+        assert_eq!(
+            installer_mime(Path::new("/tmp/App_0.21.0_x86_64.RPM")),
+            Some("application/x-rpm")
+        );
+        assert_eq!(installer_mime(Path::new("/tmp/App.AppImage")), None);
+        assert_eq!(installer_mime(Path::new("/tmp/App")), None);
+    }
+
+    /// 桌面条目解析只取 [Desktop Entry] 段：引号参数成组，动作段的 Exec 不参与。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_desktop_entry_reads_main_group_only() {
+        let text = "[Desktop Entry]\nType=Application\nTerminal=false\nExec=gdebi-gtk \"%f\" --flag\n\n[Desktop Action Other]\nExec=ignored %f\n";
+        let (exec, terminal) = parse_desktop_entry(text).unwrap();
+        assert_eq!(
+            exec,
+            vec![
+                "gdebi-gtk".to_string(),
+                "%f".to_string(),
+                "--flag".to_string()
+            ]
+        );
+        assert!(!terminal);
+        let (_, terminal) =
+            parse_desktop_entry("[Desktop Entry]\nExec=x\nTerminal=true\n").unwrap();
+        assert!(terminal);
+        assert!(parse_desktop_entry("[Desktop Entry]\nType=Application\n").is_none());
+    }
+
+    /// 字段码展开：首个文件码换成安装包路径、其余字段码丢弃、无文件码时追加路径。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exec_with_file_expands_field_codes() {
+        fn tokens(list: &[&str]) -> Vec<String> {
+            list.iter().map(|item| item.to_string()).collect()
+        }
+        assert_eq!(
+            exec_with_file(&tokens(&["gdebi-gtk", "%f"]), "/tmp/a.deb"),
+            tokens(&["gdebi-gtk", "/tmp/a.deb"])
+        );
+        assert_eq!(
+            exec_with_file(&tokens(&["apt", "--file", "%F", "%i"]), "/tmp/a.deb"),
+            tokens(&["apt", "--file", "/tmp/a.deb"])
+        );
+        assert_eq!(
+            exec_with_file(&tokens(&["gdebi-gtk"]), "/tmp/a.deb"),
+            tokens(&["gdebi-gtk", "/tmp/a.deb"])
+        );
+        assert_eq!(
+            exec_with_file(&tokens(&["sh", "-c", "echo 100%%"]), "/tmp/a.deb"),
+            tokens(&["sh", "-c", "echo 100%", "/tmp/a.deb"])
+        );
+    }
+
+    /// 桌面条目查找按目录顺序命中第一个存在的文件，并拒绝带路径的 id。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn find_desktop_entry_searches_dirs_in_order() {
+        let dir = std::env::temp_dir().join(format!("dsh-desktop-entry-{}", std::process::id()));
+        let empty = dir.join("empty");
+        let hit = dir.join("hit");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&hit).unwrap();
+        std::fs::write(
+            hit.join("gdebi.desktop"),
+            "[Desktop Entry]\nExec=gdebi-gtk %f\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_desktop_entry("gdebi.desktop", &[empty.clone(), hit.clone()]),
+            Some(hit.join("gdebi.desktop"))
+        );
+        assert_eq!(
+            find_desktop_entry("missing.desktop", &[empty, hit.clone()]),
+            None
+        );
+        assert_eq!(find_desktop_entry("../gdebi.desktop", &[hit]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 嵌套条目的 id 是相对路径把 `/` 换成 `-`：`vendor/gdebi.desktop` 应答
+    /// `vendor-gdebi.desktop`；同一 id 命中多个时浅层优先。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn find_desktop_entry_derives_ids_for_nested_dirs() {
+        let dir = std::env::temp_dir().join(format!("dsh-desktop-nested-{}", std::process::id()));
+        let apps = dir.join("applications");
+        std::fs::create_dir_all(apps.join("vendor")).unwrap();
+        std::fs::create_dir_all(apps.join("vendor/deep")).unwrap();
+        std::fs::write(apps.join("vendor/gdebi.desktop"), "nested").unwrap();
+        std::fs::write(apps.join("vendor/deep/tool.desktop"), "deep").unwrap();
+        std::fs::write(apps.join("flat-gdebi.desktop"), "flat").unwrap();
+
+        assert_eq!(
+            find_desktop_entry("vendor-gdebi.desktop", std::slice::from_ref(&apps)),
+            Some(apps.join("vendor/gdebi.desktop"))
+        );
+        assert_eq!(
+            find_desktop_entry("vendor-deep-tool.desktop", std::slice::from_ref(&apps)),
+            Some(apps.join("vendor/deep/tool.desktop"))
+        );
+        assert_eq!(
+            find_desktop_entry("flat-gdebi.desktop", std::slice::from_ref(&apps)),
+            Some(apps.join("flat-gdebi.desktop")),
+            "嵌套文件名本身不构成 id，只有推导出的 id 参与匹配"
+        );
+        assert_eq!(
+            find_desktop_entry("gdebi.desktop", std::slice::from_ref(&apps)),
+            None,
+            "仅作为嵌套文件名的 gdebi.desktop 不属于顶层 id"
+        );
+
+        std::fs::write(apps.join("vendor-flat.desktop"), "shallow").unwrap();
+        std::fs::write(apps.join("vendor/flat.desktop"), "deep").unwrap();
+        assert_eq!(
+            find_desktop_entry("vendor-flat.desktop", std::slice::from_ref(&apps)),
+            Some(apps.join("vendor-flat.desktop")),
+            "顶层与嵌套推出同一 id 时浅层优先"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// XDG 目录取值：空串按规范等同未设置，否则会把系统 applications 目录漏掉。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn applications_dirs_treats_empty_xdg_values_as_unset() {
+        use std::ffi::OsStr;
+        let home = OsStr::new("/home/tester");
+        let defaults = applications_dirs_from(None, None, Some(home));
+        assert_eq!(
+            defaults,
+            vec![
+                PathBuf::from("/home/tester/.local/share/applications"),
+                PathBuf::from("/usr/local/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+            ]
+        );
+        assert_eq!(
+            applications_dirs_from(Some(OsStr::new("")), Some(OsStr::new("")), Some(home)),
+            defaults,
+            "空串应与未设置等价"
+        );
+        assert_eq!(
+            applications_dirs_from(
+                Some(OsStr::new("/opt/data")),
+                Some(OsStr::new("/opt/a:/opt/b")),
+                Some(home)
+            ),
+            vec![
+                PathBuf::from("/opt/data/applications"),
+                PathBuf::from("/opt/a/applications"),
+                PathBuf::from("/opt/b/applications"),
+            ]
+        );
+        assert_eq!(
+            applications_dirs_from(None, None, None),
+            vec![
+                PathBuf::from("/usr/local/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+            ],
+            "无 HOME 时不应造出相对路径"
+        );
+    }
+
+    /// 处理器必须始终有活着的父进程（issue #865）：由等待子进程的 shell 启动后，
+    /// 处理器读到的 PPID 是那个 shell 且 shell 仍在运行；退回分离式启动
+    /// （open::that_detached 的 double-fork + setsid）时处理器会被 init 收养、
+    /// PPID=1，本用例即变红。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waited_handler_keeps_parent_alive() {
+        let dir = std::env::temp_dir().join(format!("dsh-handler-ppid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ppid_file = dir.join("ppid.txt");
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo $PPID > {}; sleep 1", ppid_file.display()),
+        ];
+        let mut child = spawn_waited_handler(&command).unwrap();
+        let mut recorded = None;
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&ppid_file) {
+                recorded = text.trim().parse::<u32>().ok();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let parent = recorded.expect("处理器应写出自己的 PPID");
+        assert_eq!(parent, child.id(), "处理器的父进程应是等待它的 shell");
+        assert_ne!(parent, 1, "处理器不应被 init 收养");
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "等待子进程的 shell 应在处理器运行期间存活"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 处理器程序缺失或不可执行时返回 Err，让 open_installer_now 走 opener 兜底，
+    /// 而不是静默起一个必然失败的 shell（桌面条目可能指向已被卸载的处理器）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_handler_program_is_rejected() {
+        assert!(spawn_waited_handler(&[]).is_err());
+        assert!(spawn_waited_handler(&["/nonexistent/gdebi-gtk".to_string()]).is_err());
+        assert!(spawn_waited_handler(&["no-such-handler-9f3a".to_string()]).is_err());
+        let dir = std::env::temp_dir().join(format!("dsh-handler-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("plain-handler");
+        std::fs::write(&plain, b"#!/bin/sh\n").unwrap();
+        assert!(
+            spawn_waited_handler(&[plain.to_string_lossy().into_owned()]).is_err(),
+            "存在但无执行位的程序应被拒绝"
+        );
+        let mut child = spawn_waited_handler(&["/bin/true".to_string()]).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
